@@ -1,362 +1,257 @@
 import * as THREE from "three";
-import {
-  Shell,
-  ShellHole,
-  ShellProfile,
-  FloatVector,
-  BigShellProfile,
-  ShellType,
-  BigShellHole,
-} from "../../../../../Schema";
+import { Shell } from "../../../../../Schema";
+import { FaceUtils } from "../../../utils";
+// @ts-ignore earcut is a local callback-based fork.
+import { earcut } from "../../../utils/geometry/earcut";
 import { AnyTileData, TileData } from "../types";
-import { DataSizes, PolygonSize, ShellHoleData } from "./types";
+import {
+  ShellChunkBoundary,
+  ShellContour,
+  ShellTopology,
+  ShellTopologyProfile,
+  ShellVertexIndexer,
+} from "./shell-topology";
 import { ShellUtils } from "./shell-utils";
-import { limitOf2Bytes } from "../../../model/model-types";
-import { ShellFaceX } from "./shell-face-x";
-import { ShellFace4 } from "./shell-face-4";
-import { ShellFace3 } from "./shell-face-3";
 
 export class ShellConstructor {
-  private point = new FloatVector();
-  private _shellHole = new ShellHole();
-  private _bigShellHole = new BigShellHole();
-  private interiorProfiles = new Map<number, ShellHoleData>();
-  private normalsAvgInterior = new Int16Array();
-  private _pointsPerProfile = new Map<number, number[]>();
-  private _shellProfile = new ShellProfile();
-  private _bigShellProfile = new BigShellProfile();
-  private _normalsAvg = new Int16Array();
-  private _normals: THREE.Vector3[] = [];
-  private _indices = 0;
-  private _sizes: DataSizes = {
-    vertices: 0,
-    indices: 0,
-    verticesAmount: 0,
-    normalsAmount: 0,
-    normals: 0,
-  };
-
+  private readonly _topology = new ShellTopology();
+  private readonly _vertices = new ShellVertexIndexer();
+  private readonly _chunkBoundary = new ShellChunkBoundary();
+  private readonly _faceIdPerProfile = new Map<number, number>();
+  private readonly _quad = [
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+    new THREE.Vector3(),
+  ];
+  private readonly _edgeA = new THREE.Vector3();
+  private readonly _edgeB = new THREE.Vector3();
+  private readonly _edgeC = new THREE.Vector3();
+  private readonly _crossA = new THREE.Vector3();
+  private readonly _crossB = new THREE.Vector3();
+  private readonly _polygonNormal = new THREE.Vector3();
   private _tileData!: TileData;
-  private _faceIdPerProfile = new Map<number, number>();
+  private _tileIndex = 0;
+  private _indexOffset = 0;
 
   construct(shell: Shell, meshData: TileData | TileData[]) {
-    this.resetConstructData(meshData);
-    this.getPointsPerWire(shell);
-    const data = ShellUtils.getBuffer(shell);
-    this.newShellInteriorProfiles(shell);
-    this.constructShell(shell, data, meshData);
-    this._tileData = undefined as any;
-  }
+    this._topology.setup(shell);
+    this.getFaceIds(shell);
+    this._tileIndex = 0;
+    this.startBuffer(meshData);
 
-  private getIntProfileNormalsAvg(shell: Shell, id: number) {
-    const hole = this.getTempHole(shell);
-    const indices = hole.indicesArray()!;
-    this.normalsAvgInterior = ShellUtils.computeNormalsAvg(
-      indices,
-      id,
-      this._normals,
-      this._pointsPerProfile,
-    );
-  }
-
-  private saveInteriorProfile(shell: Shell) {
-    const hole = this.getTempHole(shell);
-    const id = hole.profileId();
-    if (this.interiorProfiles.has(id)) {
-      this.saveExistingInteriorProfile(id);
-      return id;
+    const points = ShellUtils.getBuffer(shell);
+    const count = ShellUtils.getProfilesLength(shell);
+    for (let profileId = 0; profileId < count; profileId++) {
+      const profile = this._topology.get(profileId, this._vertices, true);
+      this.constructProfile(profile, points);
+      const chunkComplete = this._chunkBoundary.add(profile);
+      if (chunkComplete && profileId + 1 < count) {
+        this.finishBuffer(points);
+        this._tileIndex++;
+        this.startBuffer(meshData);
+      }
     }
-    const data = this.getNewIntProfileData();
-    this.interiorProfiles.set(id, data);
-    return id;
-  }
 
-  private computeNormalsAvg(
-    shell: Shell,
-    indices: Uint16Array | Uint32Array,
-    id: number,
-  ) {
-    const isShell = this.isShell(shell);
-    if (!isShell) return;
-    const n = this._normals;
-    const ppp = this._pointsPerProfile;
-    this._normalsAvg = ShellUtils.computeNormalsAvg(indices, id, n, ppp);
-  }
-
-  private isShell(shell: Shell) {
-    return shell instanceof Shell;
-  }
-
-  private getPointsPerWire(shell: Shell) {
-    const isShell = this.isShell(shell);
-    if (!isShell) return;
-    ShellUtils.getNormalsOfShellProfile(shell, this._normals);
-    this._pointsPerProfile = ShellUtils.getPointsShell(shell);
-  }
-
-  private getIndices(shell: Shell, id: number) {
-    const profile = this.getTempProfile(shell);
-    ShellUtils.getProfile(shell, id, profile);
-    return profile.indicesArray()!;
-  }
-
-  private resetConstructData(meshData: AnyTileData) {
-    this._indices = 0;
+    this.finishBuffer(points);
     this._tileData = undefined as any;
-    this.nextBuffer(meshData);
-    this._normals.length = 0;
-  }
-
-  private initializeIndices() {
-    const size = this._tileData.indexCount!;
-    this._tileData.indexBuffer = new Uint16Array(size);
-  }
-
-  private constructFace4(
-    indices: Uint16Array | Uint32Array,
-    data: Float32Array,
-    id: number,
-  ) {
-    const faceId = this._faceIdPerProfile.get(id)!;
-    ShellFace4.create(
-      indices,
-      data,
-      this._normalsAvg,
-      id,
-      this._tileData,
-      this._sizes,
-      faceId,
-    );
-  }
-
-  private initializeSizes() {
-    this._sizes.vertices = 0;
-    this._sizes.indices = 0;
-    this._sizes.verticesAmount = 0;
-    this._sizes.normalsAmount = 0;
-    this._sizes.normals = 0;
-  }
-
-  private getInteriorProfileBuffer(shell: Shell, intProfile: ShellHoleData) {
-    const hole = this.getTempHole(shell);
-    const count = hole.indicesLength();
-    const isShell = this.isShell(shell);
-    if (!isShell) return;
-    for (let id = 0; id < count; id++) {
-      this.getIntProfilePoints(id, shell, intProfile);
-      this.getIntProfileNormals(intProfile, id);
-    }
   }
 
   private constructProfile(
-    id: number,
-    shell: Shell,
-    indices: Uint16Array | Uint32Array,
-    data: Float32Array,
+    profile: ShellTopologyProfile,
+    points: Float32Array,
   ) {
-    const profile = this.getTempProfile(shell);
-    const indexAmount = profile.indicesLength();
-    const notAHole = !this.interiorProfiles.has(id);
-    const isFace3 = indexAmount === PolygonSize.three;
-    if (isFace3 && notAHole) {
-      this.constructFace3(indices, data, id);
+    const hasHoles = profile.holes.length > 0;
+    const outerVertexIds = profile.outer.vertexIds!;
+    if (profile.outer.pointIds.length === 3 && !hasHoles) {
+      this.emitTriangle(
+        outerVertexIds[0],
+        outerVertexIds[1],
+        outerVertexIds[2],
+      );
       return;
     }
-    const isFace4 = indexAmount === PolygonSize.four;
-    if (isFace4 && notAHole) {
-      this.constructFace4(indices, data, id);
+
+    if (
+      profile.outer.pointIds.length === 4 &&
+      !hasHoles &&
+      this.isConvexQuad(profile.outer.pointIds, points)
+    ) {
+      this.emitTriangle(
+        outerVertexIds[0],
+        outerVertexIds[1],
+        outerVertexIds[3],
+      );
+      this.emitTriangle(
+        outerVertexIds[3],
+        outerVertexIds[1],
+        outerVertexIds[2],
+      );
       return;
     }
-    this.constructFaceX(indices, data, id);
+
+    this.constructPolygon(profile, points);
   }
 
-  private getIntProfileNormals(hole: ShellHoleData, id: number) {
-    const index = id * 3;
-    const nx = this.normalsAvgInterior[index];
-    const ny = this.normalsAvgInterior[index + 1];
-    const nz = this.normalsAvgInterior[index + 2];
-    hole.normals!.push(nx, ny, nz);
-  }
-
-  private saveExistingInteriorProfile(id: number) {
-    const found = this.interiorProfiles.get(id)!;
-    const pointCount = found.points.length;
-    const indexCount = pointCount / 3;
-    found.indices.push(indexCount);
-    this.interiorProfiles.set(id, found);
-  }
-
-  private getNewIntProfileData() {
-    const indices = [0];
-    const points = [] as number[];
-    const normals = [] as number[];
-    return { indices, points, normals };
-  }
-
-  private constructFace3(
-    indices: Uint16Array | Uint32Array,
-    data: Float32Array,
-    id: number,
+  private constructPolygon(
+    profile: ShellTopologyProfile,
+    points: Float32Array,
   ) {
-    const faceId = this._faceIdPerProfile.get(id)!;
-    ShellFace3.create(
-      indices,
-      data,
-      this._normalsAvg,
-      this._tileData,
-      this._sizes,
-      faceId,
+    let pointCount = profile.outer.pointIds.length;
+    for (const hole of profile.holes) pointCount += hole.pointIds.length;
+
+    const positions = new Float32Array(pointCount * 3);
+    const vertexIds = new Uint16Array(pointCount);
+    let pointOffset = 0;
+    const copyContour = (contour: ShellContour) => {
+      const contourVertexIds = contour.vertexIds!;
+      for (let index = 0; index < contour.pointIds.length; index++) {
+        const sourceOffset = contour.pointIds[index] * 3;
+        const targetOffset = pointOffset * 3;
+        positions[targetOffset] = points[sourceOffset];
+        positions[targetOffset + 1] = points[sourceOffset + 1];
+        positions[targetOffset + 2] = points[sourceOffset + 2];
+        vertexIds[pointOffset] = contourVertexIds[index];
+        pointOffset++;
+      }
+    };
+
+    copyContour(profile.outer);
+    for (const hole of profile.holes) {
+      copyContour(hole);
+    }
+
+    const holeStarts: number[] = [];
+    let holeOffset = profile.outer.pointIds.length;
+    for (const hole of profile.holes) {
+      holeStarts.push(holeOffset);
+      holeOffset += hole.pointIds.length;
+    }
+
+    this.computePolygonNormal(positions, profile.outer.pointIds.length);
+    const dimensions = FaceUtils.getEarcutDimensions(this._polygonNormal);
+    earcut(
+      positions,
+      holeStarts.length > 0 ? holeStarts : undefined,
+      3,
+      dimensions[0],
+      dimensions[1],
+      (first: number, second: number, third: number) => {
+        this.emitTriangle(
+          vertexIds[first],
+          vertexIds[second],
+          vertexIds[third],
+        );
+      },
     );
   }
 
-  private getIntProfilePoints(
-    i: number,
-    shell: Shell,
-    holeData: ShellHoleData,
-  ) {
-    const hole = this.getTempHole(shell);
-    const shellIndex = hole.indices(i) as number;
-    shell.points(shellIndex, this.point);
-    const px = this.point.x();
-    const py = this.point.y();
-    const pz = this.point.z();
-    holeData.points.push(px, py, pz);
+  private computePolygonNormal(positions: Float32Array, count: number) {
+    this._polygonNormal.set(0, 0, 0);
+    for (let index = 0; index < count; index++) {
+      const next = (index + 1) % count;
+      const currentOffset = index * 3;
+      const nextOffset = next * 3;
+      const x1 = positions[currentOffset];
+      const x2 = positions[nextOffset];
+      const y1 = positions[currentOffset + 1];
+      const y2 = positions[nextOffset + 1];
+      const z1 = positions[currentOffset + 2];
+      const z2 = positions[nextOffset + 2];
+      this._polygonNormal.x += (y1 - y2) * (z1 + z2);
+      this._polygonNormal.y += (z1 - z2) * (x1 + x2);
+      this._polygonNormal.z += (x1 - x2) * (y1 + y2);
+    }
+    this._polygonNormal.normalize();
   }
 
-  private manageMemory(shell: Shell, meshData: TileData | TileData[]) {
-    const profile = this.getTempProfile(shell);
-    const indexAmount = profile.indicesLength();
-    const vertexAmount = this._sizes.verticesAmount / 3;
-    const memoryConsumed = vertexAmount + indexAmount;
-    const memoryOverflow = memoryConsumed > limitOf2Bytes;
-    if (memoryOverflow) {
-      this.nextBuffer(meshData);
+  private isConvexQuad(
+    pointIds: Uint16Array | Uint32Array,
+    points: Float32Array,
+  ) {
+    for (let index = 0; index < 4; index++) {
+      const offset = pointIds[index] * 3;
+      this._quad[index].set(
+        points[offset],
+        points[offset + 1],
+        points[offset + 2],
+      );
+    }
+    this._edgeA.copy(this._quad[1]).sub(this._quad[0]);
+    this._edgeB.copy(this._quad[2]).sub(this._quad[0]);
+    this._edgeC.copy(this._quad[3]).sub(this._quad[0]);
+    this._crossA.crossVectors(this._edgeA, this._edgeB);
+    this._crossB.crossVectors(this._edgeB, this._edgeC);
+    return this._crossA.dot(this._crossB) > 0;
+  }
+
+  private emitTriangle(first: number, second: number, third: number) {
+    const indices = this._tileData.indexBuffer!;
+    indices[this._indexOffset++] = first;
+    indices[this._indexOffset++] = second;
+    indices[this._indexOffset++] = third;
+  }
+
+  private startBuffer(bufferGeometries: AnyTileData) {
+    if (Array.isArray(bufferGeometries)) {
+      this._tileData = bufferGeometries[this._tileIndex];
+    } else {
+      this._tileData = bufferGeometries;
+    }
+    this._tileData.indexBuffer = new Uint16Array(this._tileData.indexCount!);
+    this._tileData.positionBuffer = new Float32Array(
+      this._tileData.positionCount!,
+    );
+    this._tileData.normalBuffer = new Int16Array(this._tileData.normalCount!);
+    this._tileData.faceIdBuffer = new Uint32Array(
+      this._tileData.positionCount! / 3,
+    );
+    this._vertices.reset();
+    this._chunkBoundary.reset();
+    this._indexOffset = 0;
+  }
+
+  private finishBuffer(points: Float32Array) {
+    const positions = this._tileData.positionBuffer!;
+    const normals = this._tileData.normalBuffer!;
+    const faceIds = this._tileData.faceIdBuffer!;
+    for (let index = 0; index < this._vertices.vertices.length; index++) {
+      const vertex = this._vertices.vertices[index];
+      const sourceOffset = vertex.pointId * 3;
+      const targetOffset = index * 3;
+      positions[targetOffset] = points[sourceOffset];
+      positions[targetOffset + 1] = points[sourceOffset + 1];
+      positions[targetOffset + 2] = points[sourceOffset + 2];
+      normals[targetOffset] = vertex.normalX;
+      normals[targetOffset + 1] = vertex.normalY;
+      normals[targetOffset + 2] = vertex.normalZ;
+      faceIds[index] = this._faceIdPerProfile.get(vertex.profileId)!;
     }
   }
 
-  private nextBuffer = (bufferGeometries: TileData | TileData[]) => {
-    this.setTileData(bufferGeometries);
-    this.initializeIndices();
-    this.initializePositions();
-    this.initializeNormals();
-    this.initializeFaceIds();
-    this.initializeSizes();
-    this._indices++;
-  };
-
-  private initializeFaceIds() {
-    const size = this._tileData.positionCount!;
-    this._tileData.faceIdBuffer = new Uint32Array(size / 3);
-  }
-
   private getNextFaceId() {
-    // Random uint32 value
     const maxUint32 = 4294967295;
     return Math.random() * maxUint32;
   }
 
-  private newShellInteriorProfiles(shell: Shell) {
-    this.interiorProfiles.clear();
-    const count = ShellUtils.getHolesLength(shell);
-    const hole = this.getTempHole(shell);
-    for (let i = 0; i < count; i++) {
-      ShellUtils.getHole(shell, i, hole);
-      const id = this.saveInteriorProfile(shell);
-      const intProfile = this.interiorProfiles.get(id)!;
-      this.getIntProfileNormalsAvg(shell, id);
-      this.getInteriorProfileBuffer(shell, intProfile);
-    }
-    return this.interiorProfiles;
-  }
-
-  private initializePositions() {
-    const size = this._tileData.positionCount!;
-    this._tileData.positionBuffer = new Float32Array(size);
-  }
-
-  private initializeNormals() {
-    const size = this._tileData.normalCount!;
-    this._tileData.normalBuffer = new Int16Array(size);
-  }
-
-  private setTileData(bufferGeometries: AnyTileData) {
-    if (Array.isArray(bufferGeometries)) {
-      this._tileData = bufferGeometries[this._indices];
-      return;
-    }
-    this._tileData = bufferGeometries;
-  }
-
-  private constructShell(
-    shell: Shell,
-    data: Float32Array,
-    meshData: AnyTileData,
-  ) {
-    this.getFaceIds(shell);
-    // this._faceIdPerProfile.delete(4); // For debugging, draws this face black
-    const count = ShellUtils.getProfilesLength(shell);
-    for (let id = 0; id < count; id++) {
-      const indices = this.getIndices(shell, id);
-      this.computeNormalsAvg(shell, indices, id);
-      this.constructProfile(id, shell, indices, data);
-      this.manageMemory(shell, meshData);
-    }
-  }
-
-  private constructFaceX(
-    indices: Uint16Array | Uint32Array,
-    data: Float32Array,
-    id: number,
-  ) {
-    const faceId = this._faceIdPerProfile.get(id)!;
-    ShellFaceX.create(
-      indices,
-      data,
-      this._normalsAvg,
-      id,
-      this._tileData,
-      this.interiorProfiles,
-      this._sizes,
-      faceId,
-    );
-  }
-
-  private getTempProfile(shell: Shell) {
-    if (shell.type() === ShellType.BIG) {
-      return this._bigShellProfile;
-    }
-    return this._shellProfile;
-  }
-
-  private getTempHole(shell: Shell) {
-    if (shell.type() === ShellType.BIG) {
-      return this._bigShellHole;
-    }
-    return this._shellHole;
-  }
-
   private getFaceIds(shell: Shell) {
     this._faceIdPerProfile.clear();
-
     const faceIds = shell.profilesFaceIdsArray();
-
     const colors = new Map<number, number>();
-
     if (faceIds && faceIds.length > 0) {
-      for (let i = 0; i < faceIds.length; i++) {
-        const rawFaceId = faceIds[i]!;
+      for (let profileId = 0; profileId < faceIds.length; profileId++) {
+        const rawFaceId = faceIds[profileId];
         if (!colors.has(rawFaceId)) {
           colors.set(rawFaceId, this.getNextFaceId());
         }
-        const faceId = colors.get(rawFaceId)!;
-        this._faceIdPerProfile.set(i, faceId);
+        this._faceIdPerProfile.set(profileId, colors.get(rawFaceId)!);
       }
       return;
     }
 
-    // Default case: assign a face per profile
-    for (let i = 0; i < shell.profilesLength(); i++) {
-      this._faceIdPerProfile.set(i, this.getNextFaceId());
+    const count = ShellUtils.getProfilesLength(shell);
+    for (let profileId = 0; profileId < count; profileId++) {
+      this._faceIdPerProfile.set(profileId, this.getNextFaceId());
     }
   }
 }

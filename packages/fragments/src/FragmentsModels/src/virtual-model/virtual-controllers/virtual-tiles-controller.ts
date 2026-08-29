@@ -896,9 +896,9 @@ export class VirtualTilesController {
 
   private checkTileMemoryOverflow(tileId: number, tileData: TileData) {
     const tile = this._tiles.get(tileId);
-    const bufferSize = tile ? tile.positionCount! : 0;
-    const totalSize = bufferSize + tileData.positionCount!;
-    const memoryOverflow = totalSize > limitOf2Bytes;
+    const bufferSize = tile ? tile.positionCount! / 3 : 0;
+    const geometrySize = tileData.positionCount! / 3;
+    const memoryOverflow = bufferSize + geometrySize > limitOf2Bytes;
     return memoryOverflow;
   }
 
@@ -1054,11 +1054,11 @@ export class VirtualTilesController {
   }
 
   private processTileSpatialId(sample: number, lod: CurrentLod) {
+    const box = this._boxes.get(sample);
+    box.getCenter(this._temp.tileCenter);
     const x = this._temp.tileCenter.x;
     const y = this._temp.tileCenter.y;
     const z = this._temp.tileCenter.z;
-    const box = this._boxes.get(sample);
-    box.getCenter(this._temp.tileCenter);
     const tileDimension = this.getTileDimension(lod);
     const tx = x - (x % tileDimension);
     const ty = y - (y % tileDimension);

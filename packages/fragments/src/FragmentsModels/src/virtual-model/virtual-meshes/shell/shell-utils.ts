@@ -15,7 +15,6 @@ export class ShellUtils {
   private static _faceThreshold = Math.cos(Math.PI / 8);
   private static _shell = new Shell();
   private static _normalBuffer = new Int16Array();
-  private static _tempNormal = new THREE.Vector3();
   private static _tempPoint = new FloatVector();
   private static _shellProfile = new ShellProfile();
   private static _bigShellProfile = new BigShellProfile();
@@ -129,9 +128,46 @@ export class ShellUtils {
     const profileNormal = faceNormals[faceId];
     for (let id = 0; id < indices.length; id++) {
       const current = indices[id];
-      const pointsByProfile = pointsFaces.get(current);
-      this.aggregateNormals(pointsByProfile, faceNormals, profileNormal);
-      this.computeAvgNormal(id);
+      const pointsByProfile = pointsFaces.get(current) ?? [];
+      let normalX = 0;
+      let normalY = 0;
+      let normalZ = 0;
+
+      if (pointsByProfile.length === 0) {
+        normalX = 1;
+      } else if (pointsByProfile.length === 1) {
+        const normal = faceNormals[pointsByProfile[0]];
+        normalX = normal.x;
+        normalY = normal.y;
+        normalZ = normal.z;
+      } else {
+        for (const profileId of pointsByProfile) {
+          const normal = faceNormals[profileId];
+          const dot =
+            profileNormal.x * normal.x +
+            profileNormal.y * normal.y +
+            profileNormal.z * normal.z;
+          if (dot <= this._faceThreshold) continue;
+          normalX += normal.x;
+          normalY += normal.y;
+          normalZ += normal.z;
+        }
+      }
+
+      const length = Math.sqrt(
+        normalX * normalX + normalY * normalY + normalZ * normalZ,
+      );
+      const inverseLength = 1 / (length || 1);
+      normalX *= inverseLength;
+      normalY *= inverseLength;
+      normalZ *= inverseLength;
+      normalX *= normalizationValue;
+      normalY *= normalizationValue;
+      normalZ *= normalizationValue;
+      const offset = id * 3;
+      this._normalBuffer[offset] = normalX;
+      this._normalBuffer[offset + 1] = normalY;
+      this._normalBuffer[offset + 2] = normalZ;
     }
     return this._normalBuffer;
   }
@@ -152,20 +188,6 @@ export class ShellUtils {
     this.fetchAllPointsByProfile(shell);
     ShellUtils.fetchAllPointsByHole(shell);
     return this._pointsByProfile;
-  }
-
-  private static addNormals(
-    pointsByProfile: number[],
-    faceNormals: THREE.Vector3[],
-    profileNormal: THREE.Vector3,
-  ) {
-    for (const id of pointsByProfile) {
-      const normal = faceNormals[id];
-      const dot = profileNormal.dot(normal);
-      const isValid = dot > this._faceThreshold;
-      if (!isValid) continue;
-      this._tempNormal.add(normal);
-    }
   }
 
   private static setupNormalBuffer(indices: Uint16Array | Uint32Array) {
@@ -230,29 +252,6 @@ export class ShellUtils {
     this._v3.z += dx * sumY;
   }
 
-  private static aggregateNormals(
-    pointsByProfile: number[] | undefined,
-    faceNormals: THREE.Vector3[],
-    profileNormal: THREE.Vector3,
-  ) {
-    this._tempNormal.set(0, 0, 0);
-
-    const isZero = !pointsByProfile || !pointsByProfile.length;
-    if (isZero) {
-      this._tempNormal.set(1, 0, 0);
-      return;
-    }
-
-    const isJustOne = pointsByProfile.length === 1;
-    if (isJustOne) {
-      const first = pointsByProfile[0];
-      this._tempNormal = faceNormals[first].clone();
-      return;
-    }
-
-    ShellUtils.addNormals(pointsByProfile, faceNormals, profileNormal);
-  }
-
   private static fetchPointsForNormal(
     id: number,
     length: number,
@@ -292,12 +291,6 @@ export class ShellUtils {
         ShellUtils.savePointByProfile(index, id);
       }
     }
-  }
-
-  private static computeAvgNormal(id: number) {
-    this._tempNormal.normalize();
-    this._tempNormal.multiplyScalar(normalizationValue);
-    this._tempNormal.toArray(this._normalBuffer, id * 3);
   }
 
   private static getTempProfile(shell: Shell) {
