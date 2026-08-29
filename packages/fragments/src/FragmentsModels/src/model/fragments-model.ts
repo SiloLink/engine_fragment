@@ -85,6 +85,9 @@ export class FragmentsModel implements IFragmentsModel<true> {
    */
   readonly visibleItems = new Set<number>();
 
+  /** Main-thread local-id lookup indexed by the Fragments item id. */
+  private _itemLocalIds = new Uint32Array();
+
   /**
    * The object that represents the model in the Three.js scene.
    */
@@ -236,6 +239,7 @@ export class FragmentsModel implements IFragmentsModel<true> {
   async dispose(options?: { keepInScene?: boolean }) {
     this._isLoaded = false;
     this.visibleItems.clear();
+    this._itemLocalIds = new Uint32Array();
     this.onViewUpdated.reset();
     await this._dataManager.dispose(
       this,
@@ -292,8 +296,26 @@ export class FragmentsModel implements IFragmentsModel<true> {
    * per-vertex `id` attribute and need to map back to the public id
    * space.
    */
-  getLocalIdsFromItemIds(itemIds: Iterable<number>) {
-    return this._dataManager.getLocalIdsFromItemIds(this, itemIds);
+  async getLocalIdsFromItemIds(itemIds: Iterable<number>) {
+    const seen = new Set<number>();
+    const result: number[] = [];
+    for (const itemId of itemIds) {
+      if (
+        !Number.isInteger(itemId) ||
+        itemId < 0 ||
+        itemId >= this._itemLocalIds.length
+      )
+        continue;
+      const localId = this._itemLocalIds[itemId];
+      if (seen.has(localId)) continue;
+      seen.add(localId);
+      result.push(localId);
+    }
+    return result;
+  }
+
+  private _setItemLocalIds(itemLocalIds: Uint32Array) {
+    this._itemLocalIds = itemLocalIds;
   }
 
   /**
@@ -766,8 +788,11 @@ export class FragmentsModel implements IFragmentsModel<true> {
    * (e.g. hiding items that are not in the view, setting the LOD to far away items, etc).
    * @param camera - The camera to use.
    */
-  useCamera(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
-    this._viewManager.useCamera(camera);
+  useCamera(
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+    viewSize?: number,
+  ) {
+    this._viewManager.useCamera(camera, viewSize);
   }
 
   /**

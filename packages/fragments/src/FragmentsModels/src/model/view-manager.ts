@@ -10,6 +10,7 @@ export class ViewManager {
   currentCamera: THREE.PerspectiveCamera | THREE.OrthographicCamera | null =
     null;
 
+  private _viewSize: number | null = null;
   private readonly _tempMatrix = new THREE.Matrix4();
   private readonly _tempVec = new THREE.Vector3();
   private readonly _tempFrustum = new THREE.Frustum();
@@ -31,7 +32,17 @@ export class ViewManager {
     await model.threads.fetch(request);
   }
 
-  useCamera(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
+  useCamera(
+    camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,
+    viewSize?: number,
+  ) {
+    if (
+      viewSize !== undefined &&
+      (!Number.isFinite(viewSize) || viewSize <= 0)
+    ) {
+      throw new Error("viewSize must be a positive finite number");
+    }
+    this._viewSize = viewSize ?? null;
     const projScreenMatrix = new THREE.Matrix4();
     this.setCameraPosition(camera);
     this.setCameraFrustum(camera, projScreenMatrix);
@@ -88,7 +99,8 @@ export class ViewManager {
     view.cameraPosition = this._tempVec.applyMatrix4(this._tempMatrix);
     view.fov = fov;
     view.orthogonalDimension = this.getOrthoSize();
-    view.viewSize = Math.max(window.innerWidth, window.innerHeight);
+    view.viewSize =
+      this._viewSize ?? Math.max(window.innerWidth, window.innerHeight);
     view.graphicThreshold = GPU.estimateCapacity();
     view.graphicQuality = model.graphicsQuality * -1.5 + 2;
     view.clippingPlanes = this.getPlanes();

@@ -129,7 +129,7 @@ export class MeshManager {
       const request = this.requests.list.shift();
       if (!request) continue;
       this.processTileRequest(request);
-      this._onUpdate();
+      if (!MultithreadingHelper.isFinishRequest(request)) this._onUpdate();
     }
   }
 
@@ -139,7 +139,7 @@ export class MeshManager {
       const request = this.requests.list.shift();
       if (!request) continue;
       this.processTileRequest(request);
-      this._onUpdate();
+      if (!MultithreadingHelper.isFinishRequest(request)) this._onUpdate();
       if (performance.now() - start > this.updateThreshold) return;
     }
   }

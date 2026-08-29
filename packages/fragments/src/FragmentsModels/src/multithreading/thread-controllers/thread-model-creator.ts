@@ -56,6 +56,7 @@ export class ThreadModelCreator extends ThreadController {
 
   private finalize(input: any, model: VirtualFragmentsModel) {
     input.boundingBox = model.getFullBBox();
+    input.itemLocalIds = model.getItemLocalIds();
     input.modelData = undefined;
   }
 

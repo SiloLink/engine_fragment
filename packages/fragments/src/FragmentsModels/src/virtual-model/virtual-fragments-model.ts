@@ -276,6 +276,22 @@ export class VirtualFragmentsModel {
     return this.properties.getLocalIdsFromItemIds(itemIds);
   }
 
+  /**
+   * Build the dense main-thread identity map once during model setup.
+   * The returned array is newly allocated so it can be transferred without
+   * detaching any view into the model's FlatBuffer.
+   */
+  getItemLocalIds() {
+    const meshes = this.data.meshes();
+    if (!meshes) return new Uint32Array();
+    const itemLocalIds = new Uint32Array(meshes.meshesItemsLength());
+    for (let itemId = 0; itemId < itemLocalIds.length; itemId++) {
+      const localIdIndex = meshes.meshesItems(itemId)!;
+      itemLocalIds[itemId] = this.data.localIds(localIdIndex)!;
+    }
+    return itemLocalIds;
+  }
+
   getSequenced(
     result: ItemInformationType,
     fromItems: ItemSelectionType[],

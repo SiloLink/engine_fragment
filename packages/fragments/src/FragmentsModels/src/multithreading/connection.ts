@@ -49,7 +49,11 @@ export class Connection {
   private async manageOutput(input: any) {
     const connection = await this.fetchConnection(input);
     input.toMainThread = true;
-    connection.postMessage(input);
+    const content: Transferable[] = [];
+    if (input.itemLocalIds) {
+      content.push(input.itemLocalIds.buffer);
+    }
+    connection.postMessage(input, content);
   }
 
   private onInput = (input: MessageEvent) => {

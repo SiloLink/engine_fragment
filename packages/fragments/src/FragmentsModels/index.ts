@@ -391,7 +391,7 @@ export class FragmentsModels {
       return;
     }
     const now = performance.now();
-    if (now - this._lastUpdate < this.settings.maxUpdateRate) {
+    if (!force && now - this._lastUpdate < this.settings.maxUpdateRate) {
       return;
     }
     this._lastUpdate = now;

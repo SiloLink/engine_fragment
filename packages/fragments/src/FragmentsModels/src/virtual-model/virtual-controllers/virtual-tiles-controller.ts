@@ -263,38 +263,79 @@ export class VirtualTilesController {
     }> = [];
     if (itemIds.size === 0) return result;
 
-    for (const [tileId, tile] of this._tiles) {
+    const samplesByTile = new Map<number, Set<number>>();
+    const addTile = (tileId: number, sampleId: number) => {
+      let samples = samplesByTile.get(tileId);
+      if (!samples) {
+        samples = new Set();
+        samplesByTile.set(tileId, samples);
+      }
+      samples.add(sampleId);
+    };
+    const addTiles = (
+      tileIds: number | number[] | undefined,
+      sampleId: number,
+    ) => {
+      if (tileIds === undefined) return;
+      if (typeof tileIds === "number") {
+        addTile(tileIds, sampleId);
+        return;
+      }
+      for (const tileId of tileIds) addTile(tileId, sampleId);
+    };
+
+    for (const itemId of itemIds) {
+      const sampleIds = this._boxes.sampleOf(itemId);
+      if (!sampleIds) continue;
+      for (const sampleId of sampleIds) {
+        addTiles(this._tileBySample[sampleId], sampleId);
+        addTiles(this._lodBySample[sampleId], sampleId);
+      }
+    }
+
+    for (const [tileId, sampleIds] of samplesByTile) {
+      const tile = this._tiles.get(tileId);
       // `notVirtual === true` means the tile has been realized (buffers
       // exist, a CREATE message was sent to main thread). Virtual
       // placeholders have nothing to outline.
-      if (!tile.notVirtual) continue;
+      if (!tile || !tile.notVirtual) continue;
       const totalIndices = tile.indexCount ?? 0;
       if (!totalIndices) continue;
 
+      const locations: number[] = [];
+      for (const sampleId of sampleIds) {
+        const location = tile.sampleLocation.get(sampleId);
+        if (location !== undefined) locations.push(location);
+      }
+      if (locations.length === 0) continue;
+      locations.sort((a, b) => a - b);
+
       const positions: number[] = [];
       const sizes: number[] = [];
-      let runStart = -1;
-      let location = 0;
-      for (const [sample] of tile.sampleLocation) {
-        const inSet = itemIds.has(this.itemId(sample));
-        if (inSet) {
-          if (runStart < 0) runStart = location;
-        } else if (runStart >= 0) {
-          const startIdx = tile.indexLocation[runStart];
-          const endIdx = tile.indexLocation[location];
-          positions.push(startIdx);
-          sizes.push(endIdx - startIdx);
-          runStart = -1;
-        }
-        location++;
-      }
-      if (runStart >= 0) {
+      let runStart = locations[0];
+      let runEnd = runStart;
+      const pushRun = () => {
         const startIdx = tile.indexLocation[runStart];
+        const nextLocation = runEnd + 1;
+        const endIdx =
+          nextLocation < tile.indexLocation.length
+            ? tile.indexLocation[nextLocation]
+            : totalIndices;
         positions.push(startIdx);
-        sizes.push(totalIndices - startIdx);
-      }
+        sizes.push(endIdx - startIdx);
+      };
 
-      if (positions.length === 0) continue;
+      for (let i = 1; i < locations.length; i++) {
+        const location = locations[i];
+        if (location === runEnd + 1) {
+          runEnd = location;
+          continue;
+        }
+        pushRun();
+        runStart = location;
+        runEnd = location;
+      }
+      pushRun();
       result.push({
         tileId,
         position: new Uint32Array(positions),
@@ -307,7 +348,6 @@ export class VirtualTilesController {
 
   async update(time: number) {
     this.updateTiles(time);
-    this.notifyUpdateFinished();
     for (const tileId of this._tilesChanged) {
       const tile = this._tiles.get(tileId) as TileData;
       this._meshConnection.process({
@@ -321,6 +361,7 @@ export class VirtualTilesController {
       });
     }
     this._tilesChanged.clear();
+    this.notifyUpdateFinished();
   }
 
   raycast(

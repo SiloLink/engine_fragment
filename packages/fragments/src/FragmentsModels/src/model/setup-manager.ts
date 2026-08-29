@@ -13,6 +13,9 @@ export class SetupManager {
     const message = this.getCreateModelMessage(model, modelData, raw, config);
     const data = this.formatModelData(modelData);
     const result = await model.threads.fetch(message, data);
+    // SetupManager is the sole initializer for the model's private identity map.
+    // @ts-expect-error Intentionally calling a private lifecycle hook.
+    model._setItemLocalIds(result.itemLocalIds);
     this.updateBox(bbox, result);
   }
 
