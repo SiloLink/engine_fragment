@@ -26,6 +26,11 @@ export interface TileSampleSpan {
   count: number;
 }
 
+export interface ShellRenderLayout {
+  indices: Uint16Array;
+  oldToNewVertex: Uint16Array;
+}
+
 export interface TileData extends TileBasicData {
   box: THREE.Box3;
   indexLocation: number[];
@@ -42,6 +47,7 @@ export interface TileData extends TileBasicData {
   positionBuffer?: DataBuffer;
   faceIdBuffer?: DataBuffer;
   normalBuffer?: DataBuffer;
+  renderLayout?: ShellRenderLayout;
   visibilities?: MultiBufferData<boolean>;
   highlights?: MultiBufferData<number>;
 }

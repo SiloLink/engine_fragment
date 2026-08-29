@@ -3,6 +3,28 @@ import { RenderedFaces } from "../../../../Schema";
 import { MaterialDefinition } from "../../model/model-types";
 
 export class MaterialUtils {
+  static mergeHighlight(
+    original: MaterialDefinition,
+    highlight?: MaterialDefinition,
+  ) {
+    const combined: MaterialDefinition = { ...original };
+    if (!highlight) return combined;
+
+    const { preserveOriginalMaterial, _explicitProps, ...definition } =
+      highlight;
+    if (!preserveOriginalMaterial) {
+      Object.assign(combined, definition);
+      return combined;
+    }
+
+    for (const property of _explicitProps ?? []) {
+      if ((definition as any)[property] !== undefined) {
+        (combined as any)[property] = (definition as any)[property];
+      }
+    }
+    return combined;
+  }
+
   static isSame(a: MaterialDefinition, b: MaterialDefinition) {
     const isSameColor = this.checkSameColor(a.color, b.color);
     const isSameOpacity = this.checkSame(a.opacity, b.opacity, 1.0);

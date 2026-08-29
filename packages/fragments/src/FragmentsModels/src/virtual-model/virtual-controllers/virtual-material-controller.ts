@@ -28,6 +28,13 @@ export class VirtualMaterialController {
     return this._list[materialId];
   }
 
+  isOpaque(materialId: number, highlightId = 0) {
+    const material = this.getRequired(materialId);
+    const highlight = highlightId ? this.getRequired(highlightId) : undefined;
+    const effective = MaterialUtils.mergeHighlight(material, highlight);
+    return effective.opacity === 1 && !effective.transparent;
+  }
+
   transfer(materials: MaterialDefinition[]): number[] {
     const result = this.deduplicateMaterials(materials);
     const { materialDefinitions, ids } = result;
@@ -81,6 +88,14 @@ export class VirtualMaterialController {
       }
     }
     return false;
+  }
+
+  private getRequired(materialId: number) {
+    const material = this.fetch(materialId);
+    if (!material) {
+      throw new Error(`Fragments: Missing material ${materialId}.`);
+    }
+    return material;
   }
 
   private deduplicateMaterials(materialDefinition: MaterialDefinition[]) {

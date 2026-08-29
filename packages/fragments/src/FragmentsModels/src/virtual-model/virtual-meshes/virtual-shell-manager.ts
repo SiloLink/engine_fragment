@@ -3,7 +3,7 @@ import { VirtualMeshManager } from "./virtual-mesh-manager";
 import { LodClass, AnyTileData } from "./types";
 import { CurrentLod, ObjectClass } from "../../model/model-types";
 
-import { Shell, RepresentationClass } from "../../../../Schema";
+import { Meshes, Shell, RepresentationClass } from "../../../../Schema";
 import { ShellTemplateConstructor } from "./shell/shell-template-constructor";
 import {
   ShellConstructor,
@@ -12,6 +12,7 @@ import {
 } from "./shell";
 import { ShellUtils } from "./shell/shell-utils";
 import { ShellPointRaycaster } from "./shell/shell-point-raycaster";
+import { ShellRenderLayoutOptimizer } from "./shell/shell-render-layout";
 
 export class VirtualShellManager extends VirtualMeshManager {
   private readonly _lodClass = LodClass.AABB;
@@ -24,6 +25,18 @@ export class VirtualShellManager extends VirtualMeshManager {
   private _faceRaycaster = new ShellFaceRaycaster(this.meshes);
   private _lineRaycaster = new ShellLineRaycaster(this.meshes);
   private _pointRaycaster = new ShellPointRaycaster(this.meshes);
+  private _renderLayoutOptimizer?: ShellRenderLayoutOptimizer;
+
+  constructor(modelId: string, meshes: Meshes, optimizeRenderLayout: boolean) {
+    super(modelId, meshes);
+    if (optimizeRenderLayout) {
+      this._renderLayoutOptimizer = new ShellRenderLayoutOptimizer();
+    }
+  }
+
+  async prepareRenderLayouts() {
+    await this._renderLayoutOptimizer?.prepare();
+  }
 
   fetchMeshes(meshId: number, evenVoid: boolean) {
     const mesh = this.getMesh(meshId, CurrentLod.GEOMETRY);
@@ -82,6 +95,22 @@ export class VirtualShellManager extends VirtualMeshManager {
     if (!isVoid || !evenVoid) return;
     const shell = ShellUtils.getShell(this.meshes, meshId);
     this._constructor.construct(shell, mesh);
+    this.setupRenderLayouts(mesh);
     this.saveMesh(meshId, mesh, CurrentLod.GEOMETRY);
+  }
+
+  private setupRenderLayouts(mesh: AnyTileData) {
+    const optimizer = this._renderLayoutOptimizer;
+    if (!optimizer) return;
+    const meshes = Array.isArray(mesh) ? mesh : [mesh];
+    for (const geometry of meshes) {
+      const indices = geometry.indexBuffer;
+      const vertexCount = geometry.positionCount! / 3;
+      if (!indices || indices.length === 0) continue;
+      geometry.renderLayout = optimizer.create(
+        indices as Uint16Array,
+        vertexCount,
+      );
+    }
   }
 }

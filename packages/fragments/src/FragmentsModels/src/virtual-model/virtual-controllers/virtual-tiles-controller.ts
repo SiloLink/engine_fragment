@@ -40,6 +40,7 @@ import { MeshConnection } from "../../multithreading/mesh-connection";
 import { thread } from "../../multithreading/fragments-thread";
 import { RaycastController } from "./raycast-controller";
 import { VirtualMemoryController } from "./virtual-memory-controller";
+import { VirtualMaterialController } from "./virtual-material-controller";
 
 type VirtualMeshes = Map<RepresentationClass, VirtualMeshManager>;
 
@@ -51,6 +52,7 @@ export type VirtualTileData = {
   boxes: VirtualBoxController;
   items: ItemConfigController;
   materials: number[];
+  materialController: VirtualMaterialController;
 };
 
 enum TileDimension {
@@ -83,7 +85,11 @@ export class VirtualTilesController {
   private readonly _boxes: VirtualBoxController;
   private readonly _items: ItemConfigController;
   private readonly _materials: number[];
+  private readonly _materialController: VirtualMaterialController;
   private readonly _modelId: string;
+  private readonly _rendersTiles: boolean;
+  private _shells!: VirtualShellManager;
+  private readonly _tilesToRebuild = new Set<number>();
 
   private readonly _lastView = {
     rotation: new THREE.Vector3(),
@@ -143,6 +149,8 @@ export class VirtualTilesController {
     this._boxes = data.boxes;
     this._items = data.items;
     this._materials = data.materials;
+    this._materialController = data.materialController;
+    this._rendersTiles = data.connection !== undefined;
     this._meshConnection = new MeshConnection(
       data.modelId,
       data.connection,
@@ -193,6 +201,10 @@ export class VirtualTilesController {
   ) {
     for (const [, mesh] of this._virtualMeshes) {
       mesh.setupTemplates();
+    }
+    if (this._rendersTiles) {
+      await this._shells.prepareRenderLayouts();
+      throwIfAborted?.();
     }
     const step = Math.max(1, Math.floor(this._sampleAmount / 20));
     for (let i = 0; i < this._sampleAmount; i++) {
@@ -352,6 +364,7 @@ export class VirtualTilesController {
 
   async update(time: number) {
     this.updateTiles(time);
+    this.rebuildTiles();
     for (const tileId of this._tilesChanged) {
       const tile = this._tiles.get(tileId) as TileData;
       this._meshConnection.process({
@@ -387,7 +400,12 @@ export class VirtualTilesController {
   }
 
   private init() {
-    const shells = new VirtualShellManager(this._modelId, this.meshes);
+    const shells = new VirtualShellManager(
+      this._modelId,
+      this.meshes,
+      this._rendersTiles,
+    );
+    this._shells = shells;
     const shellsRepresentation = shells.getRepresentation();
     this._virtualMeshes.set(shellsRepresentation, shells);
     const ces = new VirtualCircleExtrusionManager(this._modelId, this.meshes);
@@ -616,28 +634,45 @@ export class VirtualTilesController {
     geometry: any,
     sample: any,
   ) {
+    const renderLayout = this.getRenderLayout(tile, geometry, sample.sample);
+    const oldToNewVertex = renderLayout?.oldToNewVertex;
     const resultPosition = tile.vertexLocation[location] * 3;
     for (let i = 0; i < geometry.positionBuffer!.length; i += 3) {
+      const oldVertex = i / 3;
+      const newVertex = oldToNewVertex ? oldToNewVertex[oldVertex] : oldVertex;
       this._temp.vector.fromArray(geometry.positionBuffer!, i);
       this._temp.vector.applyMatrix4(this._temp.matrix);
-      this._temp.vector.toArray(tile.positionBuffer!, resultPosition + i);
+      this._temp.vector.toArray(
+        tile.positionBuffer!,
+        resultPosition + newVertex * 3,
+      );
     }
 
     if (tile.normalBuffer) {
       const resultPosition = tile.vertexLocation[location] * 3;
       for (let i = 0; i < geometry.normalBuffer!.length; i += 3) {
+        const oldVertex = i / 3;
+        const newVertex = oldToNewVertex
+          ? oldToNewVertex[oldVertex]
+          : oldVertex;
         this._temp.vector.fromArray(geometry.normalBuffer!, i);
         this._temp.vector.transformDirection(this._temp.matrix);
         this._temp.vector.multiplyScalar(normalizationValue);
-        this._temp.vector.toArray(tile.normalBuffer!, resultPosition + i);
+        this._temp.vector.toArray(
+          tile.normalBuffer!,
+          resultPosition + newVertex * 3,
+        );
       }
     }
 
     if (tile.indexBuffer) {
       const indicesPosition = tile.indexLocation[location];
       const position = tile.vertexLocation[location];
+      const indices = renderLayout
+        ? renderLayout.indices
+        : geometry.indexBuffer!;
       for (let i = 0; i < geometry.indexCount!; i++) {
-        const result = geometry.indexBuffer![i] + position;
+        const result = indices[i] + position;
         tile.indexBuffer[i + indicesPosition] = result;
       }
     }
@@ -646,9 +681,13 @@ export class VirtualTilesController {
       // We define an offset to the ID to force that different samples have different face IDs
       const sampleOffset = sample.sample * 100;
       const start = tile.vertexLocation[location];
-      const end = start + geometry.positionCount! / 3;
-      for (let i = start; i < end; i++) {
-        tile.faceIdBuffer[i] = geometry.faceIdBuffer[i - start] + sampleOffset;
+      const vertexCount = geometry.positionCount! / 3;
+      for (let oldVertex = 0; oldVertex < vertexCount; oldVertex++) {
+        const newVertex = oldToNewVertex
+          ? oldToNewVertex[oldVertex]
+          : oldVertex;
+        tile.faceIdBuffer[start + newVertex] =
+          geometry.faceIdBuffer[oldVertex] + sampleOffset;
       }
     }
 
@@ -693,6 +732,27 @@ export class VirtualTilesController {
         buf[o + 3] = b3;
       }
     }
+  }
+
+  private getRenderLayout(
+    tile: TileData,
+    geometry: TileData,
+    sampleId: number,
+  ) {
+    // Triangle order is observable under alpha blending. A representation may
+    // be reused by samples with different materials, so decide per tile and
+    // keep source-translucent geometry in canonical order.
+    if (
+      tile.objectClass !== ObjectClass.SHELL ||
+      tile.lod !== CurrentLod.GEOMETRY ||
+      !this._materialController.isOpaque(
+        tile.materialId!,
+        this._samples.getHighlight(sampleId),
+      )
+    ) {
+      return undefined;
+    }
+    return geometry.renderLayout;
   }
 
   private getTileVisibility(tile: TileData, locations: number[]) {
@@ -846,12 +906,13 @@ export class VirtualTilesController {
   }
 
   private setSample(id: number, vis: boolean, high: number, lod: CurrentLod) {
+    const pastHighlight = this._samples.getHighlight(id);
     this._samples.setVisible(id, vis);
     this._samples.setHighlight(id, high);
     const tileIds = this.getTileIds(id, lod);
     if (tileIds === undefined) return;
     MiscHelper.forEach(tileIds, (tileId) => {
-      this.updateTile(tileId, id, high, high === 0);
+      this.updateTile(tileId, id, high, high === 0, pastHighlight);
     });
   }
 
@@ -884,6 +945,18 @@ export class VirtualTilesController {
     delete tile.normalBuffer;
     delete tile.faceIdBuffer;
     delete tile.ids;
+  }
+
+  private rebuildTiles() {
+    for (const tileId of this._tilesToRebuild) {
+      const tile = this._tiles.get(tileId);
+      if (!tile?.notVirtual) continue;
+      this.deleteGeometry(tileId);
+      tile.notVirtual = false;
+      VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory!;
+      this.buildNewVirtualTile(tile, tileId);
+    }
+    this._tilesToRebuild.clear();
   }
 
   private deleteTileIfNeeded(tile: TileData, tileId: number) {
@@ -1160,11 +1233,22 @@ export class VirtualTilesController {
     sample: number,
     highlight: number,
     visible: boolean,
+    pastHighlight: number,
   ) {
     const tile = this._tiles.get(tileId) as TileData;
     this.updateTileData(tile, sample, visible, highlight);
     if (tile.notVirtual) {
-      this._tilesChanged.add(tileId);
+      const opacityClassChanged =
+        tile.objectClass === ObjectClass.SHELL &&
+        tile.lod === CurrentLod.GEOMETRY &&
+        this._materialController.isOpaque(tile.materialId!, pastHighlight) !==
+          this._materialController.isOpaque(tile.materialId!, highlight);
+      if (opacityClassChanged) {
+        this._tilesChanged.delete(tileId);
+        this._tilesToRebuild.add(tileId);
+      } else if (!this._tilesToRebuild.has(tileId)) {
+        this._tilesChanged.add(tileId);
+      }
       return;
     }
     this.buildNewVirtualTile(tile, tileId);

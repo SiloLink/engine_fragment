@@ -8,12 +8,15 @@ import {
   SingleThreadedFragmentsModel,
 } from "../../../../../index";
 import type { RawShell } from "../../../../../index";
+import { VirtualShellManager } from "../virtual-shell-manager";
+import type { ShellRenderLayout } from "../types";
 
 type ShellMesh = {
   faceIdBuffer: Uint32Array;
   indexBuffer: Uint16Array;
   normalBuffer: Int16Array;
   positionBuffer: Float32Array;
+  renderLayout?: ShellRenderLayout;
 };
 
 type ShellManager = {
@@ -78,6 +81,55 @@ function oneMesh(mesh: ShellMesh | ShellMesh[]) {
 }
 
 describe("indexed SHELL construction", () => {
+  it("caches one render layout beside immutable canonical buffers", async () => {
+    const shell = createRawShell({
+      points: [
+        [0, 0, 0],
+        [1, 0, 0],
+        [1, 1, 0],
+        [0, 1, 0],
+      ],
+      profiles: new Map([
+        [0, [0, 1, 2]],
+        [1, [0, 2, 3]],
+      ]),
+      profilesFaceIds: [0, 0],
+    });
+    const { manager, model } = createShellMesh(shell, [0, 0, 0, 1, 1, 0]);
+    const canonical = oneMesh(manager.fetchMeshes(0, true));
+    const canonicalSnapshot = {
+      indices: canonical.indexBuffer.slice(),
+      positions: canonical.positionBuffer.slice(),
+      normals: canonical.normalBuffer.slice(),
+    };
+    const virtualModel = (model as any)._virtualModel;
+    const renderManager = new VirtualShellManager(
+      `shell-render-layout-${crypto.randomUUID()}`,
+      virtualModel.tiles.meshes,
+      true,
+    );
+
+    try {
+      renderManager.setupTemplates();
+      await renderManager.prepareRenderLayouts();
+      const first = oneMesh(renderManager.fetchMeshes(0, true));
+      const repeated = oneMesh(renderManager.fetchMeshes(0, true));
+
+      expect(first.renderLayout).toBeDefined();
+      expect(repeated).toBe(first);
+      expect(repeated.renderLayout).toBe(first.renderLayout);
+      expect(first.indexBuffer).toEqual(canonicalSnapshot.indices);
+      expect(first.positionBuffer).toEqual(canonicalSnapshot.positions);
+      expect(first.normalBuffer).toEqual(canonicalSnapshot.normals);
+      expect(canonical.indexBuffer).toEqual(canonicalSnapshot.indices);
+      expect(canonical.positionBuffer).toEqual(canonicalSnapshot.positions);
+      expect(canonical.normalBuffer).toEqual(canonicalSnapshot.normals);
+    } finally {
+      renderManager.dispose();
+      model.dispose();
+    }
+  });
+
   it.each([
     { faceIds: [0, 0], expectedVertices: 4 },
     { faceIds: [0, 1], expectedVertices: 6 },

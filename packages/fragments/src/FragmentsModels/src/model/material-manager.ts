@@ -11,6 +11,7 @@ import {
 import { CRC } from "../utils";
 import { LodMaterial } from "../lod";
 import { DataMap } from "../../../Utils";
+import { MaterialUtils } from "../utils/geometry/material-utils";
 
 export class MaterialManager {
   readonly list = new DataMap<number, BIMMaterial>();
@@ -31,7 +32,7 @@ export class MaterialManager {
         r,
         g,
         b,
-        THREE.SRGBColorSpace
+        THREE.SRGBColorSpace,
       );
     }
   }
@@ -64,7 +65,7 @@ export class MaterialManager {
     const { modelId, objectClass, currentLod, templateId } = request;
     if (!(modelId && objectClass !== undefined && currentLod !== undefined)) {
       throw new Error(
-        "Fragments: material definition information is missing to create the material."
+        "Fragments: material definition information is missing to create the material.",
       );
     }
 
@@ -113,7 +114,7 @@ export class MaterialManager {
         materialDefinitions,
         index,
         request,
-        materials
+        materials,
       );
       const first = highlightData.position[i];
       const value = highlightData.size[i];
@@ -132,25 +133,10 @@ export class MaterialManager {
   ) {
     const materialDefinitions = this._definitions.get(modelId);
     if (!materialDefinitions) return undefined;
-    const originalDefinition = materialDefinitions[originalIndex];
-    const newDefinition = materialDefinitions[highlightIndex];
-    if (!newDefinition || !originalDefinition) return undefined;
-    const {
-      preserveOriginalMaterial,
-      _explicitProps,
-      ...highlightDefinition
-    } = newDefinition;
-    const combined: MaterialDefinition = { ...originalDefinition };
-    if (preserveOriginalMaterial) {
-      for (const prop of _explicitProps ?? []) {
-        if ((highlightDefinition as any)[prop] !== undefined) {
-          (combined as any)[prop] = (highlightDefinition as any)[prop];
-        }
-      }
-    } else {
-      Object.assign(combined, highlightDefinition);
-    }
-    return combined;
+    const original = materialDefinitions[originalIndex];
+    const highlight = materialDefinitions[highlightIndex];
+    if (!highlight || !original) return undefined;
+    return MaterialUtils.mergeHighlight(original, highlight);
   }
 
   getFromRequest(request: any) {
@@ -209,7 +195,7 @@ export class MaterialManager {
     } else if (objectClass === ObjectClass.LINE) {
       material = this.newLODMaterial(
         { data, instancing: templateId !== undefined },
-        request
+        request,
       );
     } else {
       throw new Error("Fragments: Unsupported object class");
@@ -233,23 +219,13 @@ export class MaterialManager {
     materialDefinitions: MaterialDefinition[],
     index: any,
     request: any,
-    materials: THREE.Material[]
+    materials: THREE.Material[],
   ) {
     if (!localMap.has(highlightIndex)) {
-      const originalDefinition = materialDefinitions[index];
-      const newDefinition = materialDefinitions[highlightIndex];
-      const { preserveOriginalMaterial, _explicitProps, ...highlightDefinition } = newDefinition;
-      const combinedDefinition: MaterialDefinition = { ...originalDefinition };
-      if (preserveOriginalMaterial) {
-        for (const prop of _explicitProps ?? []) {
-          if ((highlightDefinition as any)[prop] !== undefined) {
-            (combinedDefinition as any)[prop] = (highlightDefinition as any)[prop];
-          }
-        }
-      } else {
-        Object.assign(combinedDefinition, highlightDefinition);
-      }
-      const material = this.get(combinedDefinition, request);
+      const original = materialDefinitions[index];
+      const highlight = materialDefinitions[highlightIndex];
+      const combined = MaterialUtils.mergeHighlight(original, highlight);
+      const material = this.get(combined, request);
       materials.push(material);
       localMap.set(highlightIndex, materials.length - 1);
     }
@@ -258,7 +234,7 @@ export class MaterialManager {
   private getUniqueMaterial(
     id: number,
     data: MaterialDefinition,
-    request: any
+    request: any,
   ) {
     const modelId = request.modelId;
     const material = this.list.get(id);

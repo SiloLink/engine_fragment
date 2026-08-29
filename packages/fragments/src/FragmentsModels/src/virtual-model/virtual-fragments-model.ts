@@ -853,6 +853,7 @@ export class VirtualFragmentsModel {
       boxes: this.boxes,
       items: this.itemConfig,
       materials,
+      materialController: this.materials,
     });
   }
 

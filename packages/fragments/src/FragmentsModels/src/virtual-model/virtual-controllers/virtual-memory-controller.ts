@@ -38,6 +38,10 @@ export class VirtualMemoryController {
         mesh.usedMemory += (mesh[key] as any).byteLength;
       }
     }
+    if (mesh.renderLayout) {
+      mesh.usedMemory += mesh.renderLayout.indices.byteLength;
+      mesh.usedMemory += mesh.renderLayout.oldToNewVertex.byteLength;
+    }
     this.lockIn(mesh);
   };
 

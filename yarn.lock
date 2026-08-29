@@ -1166,6 +1166,7 @@ __metadata:
     flatbuffers: 25.2.10
     glob: latest
     lru-cache: 11.1.0
+    meshoptimizer: 1.0.1
     pako: 2.1.0
     prettier: 3.2.5
     stats.js: ^0.17.0
@@ -4088,7 +4089,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"meshoptimizer@npm:~1.0.1":
+"meshoptimizer@npm:1.0.1, meshoptimizer@npm:~1.0.1":
   version: 1.0.1
   resolution: "meshoptimizer@npm:1.0.1"
   checksum: 464597746fee252d457bee7303d6146a0a7a719a005b61e3375477840239bfd286ce695db23674ed63ab11021577e45c9e1d5b0b3d2376304134b8301c501d2c
