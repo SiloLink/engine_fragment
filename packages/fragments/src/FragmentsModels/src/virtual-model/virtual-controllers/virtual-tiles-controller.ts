@@ -242,10 +242,10 @@ export class VirtualTilesController {
    * to draw only the outlined slices. No highlight bookkeeping, no
    * per-item slot allocation, no material array growth.
    *
-   * Samples are stored in the tile in insertion order with locations
-   * `0..N-1`; `indexLocation[i]` is the start of sample `i` in the tile's
-   * index buffer, so a contiguous run of in-set samples maps to a single
-   * `(position, size)` chunk.
+   * Geometry chunks are stored in tile-slot insertion order. A sample can own
+   * more than one contiguous slot, recorded by `sampleSpans`;
+   * `indexLocation[i]` is the start of slot `i` in the tile's index buffer.
+   * A contiguous run of selected slots maps to one `(position, size)` chunk.
    *
    * @param itemIds - Internal item ids to look up. Public callers go
    *   through {@link VirtualFragmentsModel.getItemDrawChunks}, which
@@ -304,8 +304,12 @@ export class VirtualTilesController {
 
       const locations: number[] = [];
       for (const sampleId of sampleIds) {
-        const location = tile.sampleLocation.get(sampleId);
-        if (location !== undefined) locations.push(location);
+        const span = tile.sampleSpans.get(sampleId);
+        if (!span) continue;
+        const end = span.start + span.count;
+        for (let location = span.start; location < end; location++) {
+          locations.push(location);
+        }
       }
       if (locations.length === 0) continue;
       locations.sort((a, b) => a - b);
@@ -719,8 +723,12 @@ export class VirtualTilesController {
     this.updateVisible(past, current, sample);
   }
 
-  private tileLoadSample(tile: TileData, sample: any, geomIndex: number) {
-    const location = tile.sampleLocation.get(sample.sample) as number;
+  private tileLoadSample(
+    tile: TileData,
+    sample: any,
+    geomIndex: number,
+    location: number,
+  ) {
     const geometry = this.getSampleGeometries(sample, geomIndex);
     this.setupTileLocation(tile, geometry, sample);
     this.fetchSampleTransform(tile, sample);
@@ -789,7 +797,7 @@ export class VirtualTilesController {
     tile.size = 0;
     tile.geometriesLocation = [];
     tile.positionCount = 0;
-    tile.sampleLocation = new Map();
+    tile.sampleSpans = new Map();
     tile.faceIdBuffer = new Uint32Array(0);
     return tile as TileData;
   }
@@ -855,7 +863,12 @@ export class VirtualTilesController {
   }
 
   private addBasicTileData(a: TileData, sample: number, id: number) {
-    a.sampleLocation.set(sample, a.size);
+    const span = a.sampleSpans.get(sample);
+    if (span) {
+      span.count++;
+    } else {
+      a.sampleSpans.set(sample, { start: a.size, count: 1 });
+    }
     a.size++;
     a.geometriesLocation.push(id);
     a.indexLocation.push(a.indexCount || 0);
@@ -911,9 +924,12 @@ export class VirtualTilesController {
     if (!tile.visibilities || !tile.highlights) {
       throw new Error("Fragments: Malformed tile!");
     }
-    const id = tile.sampleLocation.get(sample) as number;
-    tile.visibilities.update(id, visible);
-    tile.highlights.update(id, highlight);
+    const span = tile.sampleSpans.get(sample)!;
+    const end = span.start + span.count;
+    for (let location = span.start; location < end; location++) {
+      tile.visibilities.update(location, visible);
+      tile.highlights.update(location, highlight);
+    }
   }
 
   private getKeepUpdating(sampleId: number, time: number) {
@@ -1238,7 +1254,7 @@ export class VirtualTilesController {
     id: number,
   ) {
     const found = tile.geometriesLocation[position];
-    this.tileLoadSample(tile, sample, found);
+    this.tileLoadSample(tile, sample, found, position);
     if (isStart) {
       const box = this._boxes.get(id);
       this._temp.vector.copy(tile.location!);
@@ -1266,10 +1282,19 @@ export class VirtualTilesController {
       tile.usedMemory += tile.faceIdBuffer.byteLength;
     }
     const isStart = !tile.location;
-    for (const [id, position] of tile.sampleLocation) {
+    for (const [id, span] of tile.sampleSpans) {
       const sample = this.fetchSample(id, tile.lod!);
       if (sample && sample.geometries) {
-        this.buildSampleInTile(tile, position, sample, isStart, id);
+        const end = span.start + span.count;
+        for (let position = span.start; position < end; position++) {
+          this.buildSampleInTile(
+            tile,
+            position,
+            sample,
+            isStart && position === span.start,
+            id,
+          );
+        }
       }
     }
   }

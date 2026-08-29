@@ -21,11 +21,16 @@ export interface TileBasicData {
 
 export type AnyTileBasicData = TileBasicData | TileBasicData[];
 
+export interface TileSampleSpan {
+  start: number;
+  count: number;
+}
+
 export interface TileData extends TileBasicData {
   box: THREE.Box3;
   indexLocation: number[];
   vertexLocation: number[];
-  sampleLocation: Map<number, number>;
+  sampleSpans: Map<number, TileSampleSpan>;
   geometriesLocation: number[];
   size: number;
   notVirtual: boolean;

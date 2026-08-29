@@ -127,7 +127,7 @@ describe("SiloLink Fragments runtime contracts", () => {
             notVirtual: true,
             indexCount: 3,
             indexLocation: [0],
-            sampleLocation: new Map([[99, 0]]),
+            sampleSpans: new Map([[99, { start: 0, count: 1 }]]),
           },
         ],
         [
@@ -136,11 +136,11 @@ describe("SiloLink Fragments runtime contracts", () => {
             notVirtual: true,
             indexCount: 21,
             indexLocation: [0, 3, 9, 15],
-            sampleLocation: new Map([
-              [50, 0],
-              [2, 1],
-              [3, 2],
-              [51, 3],
+            sampleSpans: new Map([
+              [50, { start: 0, count: 1 }],
+              [2, { start: 1, count: 1 }],
+              [3, { start: 2, count: 1 }],
+              [51, { start: 3, count: 1 }],
             ]),
           },
         ],
@@ -150,9 +150,9 @@ describe("SiloLink Fragments runtime contracts", () => {
             notVirtual: true,
             indexCount: 12,
             indexLocation: [0, 6],
-            sampleLocation: new Map([
-              [40, 0],
-              [3, 1],
+            sampleSpans: new Map([
+              [40, { start: 0, count: 1 }],
+              [3, { start: 1, count: 1 }],
             ]),
           },
         ],
@@ -162,7 +162,7 @@ describe("SiloLink Fragments runtime contracts", () => {
             notVirtual: true,
             indexCount: 6,
             indexLocation: [0],
-            sampleLocation: new Map([[2, 0]]),
+            sampleSpans: new Map([[2, { start: 0, count: 1 }]]),
           },
         ],
         [
@@ -171,7 +171,7 @@ describe("SiloLink Fragments runtime contracts", () => {
             notVirtual: false,
             indexCount: 6,
             indexLocation: [0],
-            sampleLocation: new Map([[3, 0]]),
+            sampleSpans: new Map([[3, { start: 0, count: 1 }]]),
           },
         ],
       ]),
