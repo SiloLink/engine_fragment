@@ -43,14 +43,22 @@ export class ShellConstructor {
     const points = ShellUtils.getBuffer(shell);
     const count = ShellUtils.getProfilesLength(shell);
     for (let profileId = 0; profileId < count; profileId++) {
-      const profile = this._topology.get(profileId, this._vertices, true);
-      this.constructProfile(profile, points);
-      const chunkComplete = this._chunkBoundary.add(profile);
-      if (chunkComplete && profileId + 1 < count) {
+      const profileStartVertexCount = this._vertices.size;
+      let profile = this._topology.get(profileId, this._vertices, true);
+      if (
+        this._chunkBoundary.shouldStartNewChunk(
+          profileStartVertexCount,
+          this._vertices.size,
+        )
+      ) {
+        this._vertices.rollback(profileStartVertexCount);
         this.finishBuffer(points);
         this._tileIndex++;
         this.startBuffer(meshData);
+        profile = this._topology.get(profileId, this._vertices, true);
+        this._chunkBoundary.shouldStartNewChunk(0, this._vertices.size);
       }
+      this.constructProfile(profile, points);
     }
 
     this.finishBuffer(points);
@@ -207,7 +215,6 @@ export class ShellConstructor {
       this._tileData.positionCount! / 3,
     );
     this._vertices.reset();
-    this._chunkBoundary.reset();
     this._indexOffset = 0;
   }
 

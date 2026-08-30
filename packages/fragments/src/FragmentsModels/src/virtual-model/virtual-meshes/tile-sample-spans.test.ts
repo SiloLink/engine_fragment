@@ -239,6 +239,39 @@ describe("tile sample spans", () => {
     expect([...process.mock.calls[1][0].indices]).toEqual([2, 0, 3, 2, 3, 1]);
   });
 
+  it("re-realizes a cached geometry tile after a translucent wire LOD", () => {
+    const { controller, tile } = createRenderLayoutHarness(true);
+    const process = vi.fn();
+    controller._meshConnection = { process };
+    controller._modelId = "model";
+    controller._tiles = new Map([[101, tile]]);
+    controller._tileBySample = [];
+    controller._tileBySample[7] = 101;
+    controller._lodBySample = [];
+    controller._tilesChanged = new Set();
+    controller._tilesToRebuild = new Set();
+    controller._virtualView = undefined;
+    controller._sampleAmount = 1;
+    controller._changedSamples = 0;
+    controller.tilesUpdated = false;
+
+    controller.buildNewVirtualTile(tile, 101);
+    expect([...process.mock.calls[0][0].indices]).toEqual([2, 0, 3, 2, 3, 1]);
+
+    // The sample can become translucent while represented by its WIRES tile.
+    // Returning to the cached GEOMETRY tile must compare against the layout
+    // actually realized in that tile, not only the already-current highlight.
+    controller._samples.setHighlight(7, 9);
+    process.mockClear();
+    controller.setSample(7, true, 9, CurrentLod.GEOMETRY);
+    controller.update(0);
+
+    expect(
+      process.mock.calls.map(([request]: any[]) => request.tileRequestClass),
+    ).toEqual([TileRequestClass.DELETE, TileRequestClass.CREATE]);
+    expect([...process.mock.calls[1][0].indices]).toEqual([0, 1, 2, 0, 2, 3]);
+  });
+
   it("keeps same-opacity highlight changes on the lightweight update path", () => {
     const { controller, tile } = createRenderLayoutHarness(true);
     const process = vi.fn();

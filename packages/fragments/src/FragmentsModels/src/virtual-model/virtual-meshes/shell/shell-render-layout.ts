@@ -1,22 +1,26 @@
-import { MeshoptEncoder } from "meshoptimizer/encoder";
 import { limitOf2Bytes } from "../../../model/model-types";
 import { ShellRenderLayout } from "../types";
 
+type MeshoptEncoderApi =
+  (typeof import("meshoptimizer/encoder"))["MeshoptEncoder"];
+
 export class ShellRenderLayoutOptimizer {
-  private _prepared = false;
+  private _encoder?: MeshoptEncoderApi;
 
   async prepare() {
+    const { MeshoptEncoder } = await import("meshoptimizer/encoder");
     if (!MeshoptEncoder.supported) {
       throw new Error(
         "Fragments: SHELL render-layout optimization requires WebAssembly.",
       );
     }
     await MeshoptEncoder.ready;
-    this._prepared = true;
+    this._encoder = MeshoptEncoder;
   }
 
   create(indices: Uint16Array, vertexCount: number): ShellRenderLayout {
-    if (!this._prepared) {
+    const encoder = this._encoder;
+    if (!encoder) {
       throw new Error(
         "Fragments: SHELL render-layout optimizer was not prepared.",
       );
@@ -24,7 +28,7 @@ export class ShellRenderLayoutOptimizer {
     this.validate(indices, vertexCount);
 
     const optimizedIndices = new Uint32Array(indices);
-    const [partialRemap, referencedVertexCount] = MeshoptEncoder.reorderMesh(
+    const [partialRemap, referencedVertexCount] = encoder.reorderMesh(
       optimizedIndices,
       true,
       false,

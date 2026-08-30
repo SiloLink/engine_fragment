@@ -10,6 +10,7 @@ import {
 import type { RawShell } from "../../../../../index";
 import { VirtualShellManager } from "../virtual-shell-manager";
 import type { ShellRenderLayout } from "../types";
+import { ShellTemplateConstructor } from "./shell-template-constructor";
 
 type ShellMesh = {
   faceIdBuffer: Uint32Array;
@@ -42,7 +43,7 @@ function createRawShell({
   };
 }
 
-function createShellMesh(shell: RawShell, bbox: number[]) {
+function createShellBytes(shell: RawShell, bbox: number[]) {
   const empty = EditUtils.newModel({ raw: true });
   const core = EditUtils.getModelFromBuffer(empty, true);
   const { model: bytes } = EditUtils.edit(
@@ -60,6 +61,11 @@ function createShellMesh(shell: RawShell, bbox: number[]) {
     ],
     { raw: true },
   );
+  return bytes;
+}
+
+function createShellMesh(shell: RawShell, bbox: number[]) {
+  const bytes = createShellBytes(shell, bbox);
   const model = new SingleThreadedFragmentsModel(
     `shell-indexing-${crypto.randomUUID()}`,
     bytes,
@@ -73,6 +79,13 @@ function createShellMesh(shell: RawShell, bbox: number[]) {
     throw new Error("Synthetic fragment has no SHELL manager");
   }
   return { manager, model };
+}
+
+function createShellTemplate(shell: RawShell, bbox: number[]) {
+  const bytes = createShellBytes(shell, bbox);
+  const model = EditUtils.getModelFromBuffer(bytes, true);
+  const schemaShell = model.meshes()!.shells(0)!;
+  return new ShellTemplateConstructor().newMeshTemplate(schemaShell);
 }
 
 function oneMesh(mesh: ShellMesh | ShellMesh[]) {
@@ -187,6 +200,48 @@ describe("indexed SHELL construction", () => {
     }
   });
 
+  it("accepts a profile whose repeated contour entries fit after indexing", () => {
+    const uniqueVertexCount = 32_769;
+    const points = Array.from({ length: uniqueVertexCount }, (_, point) => [
+      point,
+      point % 2,
+      0,
+    ]);
+    const profile = Array.from({ length: uniqueVertexCount * 2 }, (_, entry) =>
+      Math.floor(entry / 2),
+    );
+    const shell = createRawShell({
+      points,
+      profiles: new Map([[0, profile]]),
+      profilesFaceIds: [0],
+      type: ShellType.BIG,
+    });
+
+    expect(() =>
+      createShellTemplate(shell, [0, 0, 0, uniqueVertexCount - 1, 1, 0]),
+    ).not.toThrow();
+  });
+
+  it("rejects a profile with more unique indexed vertices than Uint16 supports", () => {
+    const vertexCount = 65_537;
+    const points = Array.from({ length: vertexCount }, (_, point) => [
+      point,
+      point % 2,
+      0,
+    ]);
+    const profile = Array.from({ length: vertexCount }, (_, point) => point);
+    const shell = createRawShell({
+      points,
+      profiles: new Map([[0, profile]]),
+      profilesFaceIds: [0],
+      type: ShellType.BIG,
+    });
+
+    expect(() =>
+      createShellTemplate(shell, [0, 0, 0, vertexCount - 1, 1, 0]),
+    ).toThrow("Fragments: SHELL profile exceeds Uint16 vertex capacity.");
+  });
+
   it("keeps every generated chunk within Uint16 vertex capacity", () => {
     const squareCount = 16_385;
     const points: number[][] = [];
@@ -213,6 +268,58 @@ describe("indexed SHELL construction", () => {
       squareCount * 2,
       1,
       0,
+    ]);
+    try {
+      const result = manager.fetchMeshes(0, true);
+      const meshes = Array.isArray(result) ? result : [result];
+      expect(meshes).toHaveLength(2);
+      for (const mesh of meshes) {
+        const vertexCount = mesh.positionBuffer.length / 3;
+        expect(vertexCount).toBeLessThanOrEqual(65_536);
+        expect(Math.max(...mesh.indexBuffer)).toBeLessThan(vertexCount);
+      }
+    } finally {
+      model.dispose();
+    }
+  });
+
+  it("starts a new chunk before an irregular profile can overflow Uint16", () => {
+    const triangleCount = 21_000;
+    const finalProfilePointCount = 3_000;
+    const points: number[][] = [];
+    const profiles = new Map<number, number[]>();
+    const profilesFaceIds: number[] = [];
+    for (let triangle = 0; triangle < triangleCount; triangle++) {
+      const point = triangle * 3;
+      const x = triangle * 2;
+      points.push([x, 0, 0], [x + 1, 0, 0], [x, 1, 0]);
+      profiles.set(triangle, [point, point + 1, point + 2]);
+      profilesFaceIds.push(0);
+    }
+
+    const finalProfile: number[] = [];
+    const finalProfileStart = points.length;
+    for (let point = 0; point < finalProfilePointCount; point++) {
+      const angle = (point / finalProfilePointCount) * Math.PI * 2;
+      points.push([Math.cos(angle), Math.sin(angle), 1]);
+      finalProfile.push(finalProfileStart + point);
+    }
+    profiles.set(triangleCount, finalProfile);
+    profilesFaceIds.push(1);
+
+    const shell = createRawShell({
+      points,
+      profiles,
+      profilesFaceIds,
+      type: ShellType.BIG,
+    });
+    const { manager, model } = createShellMesh(shell, [
+      0,
+      -1,
+      0,
+      triangleCount * 2,
+      1,
+      1,
     ]);
     try {
       const result = manager.fetchMeshes(0, true);

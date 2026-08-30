@@ -48,6 +48,7 @@ export interface TileData extends TileBasicData {
   faceIdBuffer?: DataBuffer;
   normalBuffer?: DataBuffer;
   renderLayout?: ShellRenderLayout;
+  renderLayoutOpaqueBySample?: Map<number, boolean>;
   visibilities?: MultiBufferData<boolean>;
   highlights?: MultiBufferData<number>;
 }

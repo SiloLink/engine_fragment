@@ -41,6 +41,16 @@ export class ShellVertexIndexer {
     this._verticesByPoint.clear();
   }
 
+  rollback(size: number) {
+    for (let index = this.vertices.length - 1; index >= size; index--) {
+      const vertex = this.vertices[index];
+      const variants = this._verticesByPoint.get(vertex.pointId)!;
+      variants.pop();
+      if (variants.length === 0) this._verticesByPoint.delete(vertex.pointId);
+    }
+    this.vertices.length = size;
+  }
+
   add(
     pointId: number,
     normalX: number,
@@ -82,25 +92,17 @@ export class ShellVertexIndexer {
 }
 
 export class ShellChunkBoundary {
-  private _holePoints = 0;
-  private _profilePoints = 0;
-  private _indexCount = 0;
-
-  reset() {
-    this._holePoints = 0;
-    this._profilePoints = 0;
-    this._indexCount = 0;
-  }
-
-  add(profile: ShellTopologyProfile) {
-    this._indexCount = profile.outer.pointIds.length;
-    this._profilePoints += this._indexCount;
-    for (const hole of profile.holes) {
-      this._holePoints += hole.pointIds.length;
+  shouldStartNewChunk(
+    currentVertexCount: number,
+    candidateVertexCount: number,
+  ) {
+    if (candidateVertexCount <= limitOf2Bytes) return false;
+    if (currentVertexCount === 0) {
+      throw new Error(
+        "Fragments: SHELL profile exceeds Uint16 vertex capacity.",
+      );
     }
-    const nextProfileCapacity =
-      this._holePoints + this._profilePoints + this._indexCount;
-    return nextProfileCapacity > limitOf2Bytes;
+    return true;
   }
 }
 

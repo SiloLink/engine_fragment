@@ -742,17 +742,21 @@ export class VirtualTilesController {
     // Triangle order is observable under alpha blending. A representation may
     // be reused by samples with different materials, so decide per tile and
     // keep source-translucent geometry in canonical order.
-    if (
-      tile.objectClass !== ObjectClass.SHELL ||
-      tile.lod !== CurrentLod.GEOMETRY ||
-      !this._materialController.isOpaque(
-        tile.materialId!,
-        this._samples.getHighlight(sampleId),
-      )
-    ) {
+    if (!this.shouldUseRenderLayout(tile, sampleId)) {
       return undefined;
     }
     return geometry.renderLayout;
+  }
+
+  private shouldUseRenderLayout(tile: TileData, sampleId: number) {
+    return (
+      tile.objectClass === ObjectClass.SHELL &&
+      tile.lod === CurrentLod.GEOMETRY &&
+      this._materialController.isOpaque(
+        tile.materialId!,
+        this._samples.getHighlight(sampleId),
+      )
+    );
   }
 
   private getTileVisibility(tile: TileData, locations: number[]) {
@@ -858,6 +862,7 @@ export class VirtualTilesController {
     tile.geometriesLocation = [];
     tile.positionCount = 0;
     tile.sampleSpans = new Map();
+    tile.renderLayoutOpaqueBySample = new Map();
     tile.faceIdBuffer = new Uint32Array(0);
     return tile as TileData;
   }
@@ -906,13 +911,12 @@ export class VirtualTilesController {
   }
 
   private setSample(id: number, vis: boolean, high: number, lod: CurrentLod) {
-    const pastHighlight = this._samples.getHighlight(id);
     this._samples.setVisible(id, vis);
     this._samples.setHighlight(id, high);
     const tileIds = this.getTileIds(id, lod);
     if (tileIds === undefined) return;
     MiscHelper.forEach(tileIds, (tileId) => {
-      this.updateTile(tileId, id, high, high === 0, pastHighlight);
+      this.updateTile(tileId, id, high, high === 0);
     });
   }
 
@@ -1233,17 +1237,17 @@ export class VirtualTilesController {
     sample: number,
     highlight: number,
     visible: boolean,
-    pastHighlight: number,
   ) {
     const tile = this._tiles.get(tileId) as TileData;
     this.updateTileData(tile, sample, visible, highlight);
     if (tile.notVirtual) {
-      const opacityClassChanged =
+      const realizedLayoutOpaque = tile.renderLayoutOpaqueBySample?.get(sample);
+      const renderLayoutClassChanged =
         tile.objectClass === ObjectClass.SHELL &&
         tile.lod === CurrentLod.GEOMETRY &&
-        this._materialController.isOpaque(tile.materialId!, pastHighlight) !==
-          this._materialController.isOpaque(tile.materialId!, highlight);
-      if (opacityClassChanged) {
+        realizedLayoutOpaque !== undefined &&
+        realizedLayoutOpaque !== this.shouldUseRenderLayout(tile, sample);
+      if (renderLayoutClassChanged) {
         this._tilesChanged.delete(tileId);
         this._tilesToRebuild.add(tileId);
       } else if (!this._tilesToRebuild.has(tileId)) {
@@ -1365,8 +1369,14 @@ export class VirtualTilesController {
       tile.faceIdBuffer = new Uint32Array(tile.positionCount! / 3);
       tile.usedMemory += tile.faceIdBuffer.byteLength;
     }
+    tile.renderLayoutOpaqueBySample ??= new Map();
+    tile.renderLayoutOpaqueBySample.clear();
     const isStart = !tile.location;
     for (const [id, span] of tile.sampleSpans) {
+      tile.renderLayoutOpaqueBySample.set(
+        id,
+        this.shouldUseRenderLayout(tile, id),
+      );
       const sample = this.fetchSample(id, tile.lod!);
       if (sample && sample.geometries) {
         const end = span.start + span.count;

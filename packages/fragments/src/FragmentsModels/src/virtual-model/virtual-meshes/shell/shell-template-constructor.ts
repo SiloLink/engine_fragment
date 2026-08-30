@@ -23,10 +23,20 @@ export class ShellTemplateConstructor {
     this._topology.setup(shell);
     const count = ShellUtils.getProfilesLength(shell);
     for (let profileId = 0; profileId < count; profileId++) {
-      const profile = this._topology.get(profileId, this._vertices, false);
+      const profileStartVertexCount = this._vertices.size;
+      let profile = this._topology.get(profileId, this._vertices, false);
+      if (
+        this._chunkBoundary.shouldStartNewChunk(
+          profileStartVertexCount,
+          this._vertices.size,
+        )
+      ) {
+        this._vertices.rollback(profileStartVertexCount);
+        this.setMesh();
+        profile = this._topology.get(profileId, this._vertices, false);
+        this._chunkBoundary.shouldStartNewChunk(0, this._vertices.size);
+      }
       this._triangleAmount += getShellTriangleCount(profile);
-      const chunkComplete = this._chunkBoundary.add(profile);
-      if (chunkComplete) this.setMesh();
     }
     if (this.hasData()) this.setMesh();
     const result = this._meshes as TileBasicData;
@@ -58,7 +68,6 @@ export class ShellTemplateConstructor {
 
   private reset(evenMeshes: boolean) {
     this._vertices.reset();
-    this._chunkBoundary.reset();
     this._triangleAmount = 0;
     if (evenMeshes) this._meshes = undefined;
   }

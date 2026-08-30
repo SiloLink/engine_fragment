@@ -39,11 +39,13 @@ export default defineConfig({
         {
           entryFileNames: `worker.mjs`,
           format: "es",
+          inlineDynamicImports: true,
         },
         {
           entryFileNames: `worker.min.mjs`,
           plugins: [pluginTerser()],
           format: "es",
+          inlineDynamicImports: true,
         },
       ],
     },
