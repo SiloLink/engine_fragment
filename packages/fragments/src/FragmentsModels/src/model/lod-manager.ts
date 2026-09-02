@@ -40,7 +40,9 @@ export class LODManager {
     if (highlightData) {
       LodHelper.setLodHighlight(geometry, highlightData);
     }
-    geometry.addGroup(0, Infinity, 0);
+    if (visibilityData || highlightData) {
+      geometry.addGroup(0, Infinity, 0);
+    }
   }
 
   applyHighlight(mesh: LODMesh, request: any) {

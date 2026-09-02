@@ -12,6 +12,7 @@ import { RequestsManager } from "./requests-manager";
 import { LODManager } from "./lod-manager";
 import { LODMesh } from "../lod";
 import { MultithreadingHelper } from "../multithreading/multithreading-helper";
+import { FragmentsMultiDrawMesh } from "./fragments-multi-draw-mesh";
 
 /**
  * A class that manages the creation and updating of meshes in a Fragments model.
@@ -209,7 +210,7 @@ export class MeshManager {
     this.setItemIds(itemIds, geometry);
     this.setFaceIds(faceIds, geometry);
     const material = this.materials.getFromRequest(request);
-    return new THREE.Mesh(geometry, [material]);
+    return new FragmentsMultiDrawMesh(geometry, [material]);
   }
 
   private setupBoundings(mesh: BIMMesh, aabb: any) {

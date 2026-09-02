@@ -34,7 +34,7 @@ export class ShellTemplateConstructor {
         this._vertices.rollback(profileStartVertexCount);
         this.setMesh();
         profile = this._topology.get(profileId, this._vertices, false);
-        this._chunkBoundary.shouldStartNewChunk(0, this._vertices.size);
+        this._chunkBoundary.assertProfileFits(this._vertices.size);
       }
       this._triangleAmount += getShellTriangleCount(profile);
     }

@@ -804,6 +804,16 @@ export class FragmentsModel implements IFragmentsModel<true> {
   }
 
   /**
+   * Keeps specific visible, unclipped items in their full geometry
+   * representation instead of reducing them through distance-based LOD.
+   * @param localIds - The local IDs of the items to update.
+   * @param pinned - Whether the items should retain full geometry.
+   */
+  setItemsGeometryPinned(localIds: number[], pinned: boolean) {
+    return this._viewManager.setItemsGeometryPinned(this, localIds, pinned);
+  }
+
+  /**
    * Performs a rectangle raycast on the model.
    * @param data - The data of the rectangle raycast.
    */

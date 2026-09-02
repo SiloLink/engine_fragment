@@ -30,7 +30,7 @@ export default defineConfig({
   build: {
     outDir: "./dist",
     minify: false,
-    sourcemap: true,
+    sourcemap: "hidden",
     lib: {
       entry: path.resolve(__dirname, "./src/index.ts"),
     },
@@ -43,7 +43,6 @@ export default defineConfig({
         {
           entryFileNames: `index.mjs`,
           format: "es",
-          sourcemap: true,
           globals: {
             three: "THREE",
           },
@@ -51,7 +50,6 @@ export default defineConfig({
         {
           entryFileNames: `index.cjs`,
           format: "cjs",
-          sourcemap: true,
           globals: {
             three: "THREE",
           },

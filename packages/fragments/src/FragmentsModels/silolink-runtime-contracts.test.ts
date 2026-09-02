@@ -2,10 +2,24 @@ import * as THREE from "three";
 import { describe, expect, it, vi } from "vitest";
 import { FragmentsModels } from "./index";
 import { FragmentsModel } from "./src/model/fragments-model";
-import { TileRequestClass } from "./src/model/model-types";
+import { CurrentLod, TileRequestClass } from "./src/model/model-types";
 import { VirtualTilesController } from "./src/virtual-model/virtual-controllers/virtual-tiles-controller";
 
 describe("SiloLink Fragments runtime contracts", () => {
+  it("batches wire LODs more broadly without changing geometry tile size", () => {
+    const controller = Object.create(VirtualTilesController.prototype) as any;
+    controller._tileDimension = 32;
+    controller._params = {
+      tileSizeMultiplier: 10,
+      wireTileSizeMultiplier: 2,
+    };
+    const getTileDimension = (VirtualTilesController.prototype as any)
+      .getTileDimension as (lod: CurrentLod) => number;
+
+    expect(getTileDimension.call(controller, CurrentLod.WIRES)).toBe(64);
+    expect(getTileDimension.call(controller, CurrentLod.GEOMETRY)).toBe(320);
+  });
+
   it("rate-limits ordinary refreshes without skipping a forced fence", async () => {
     const refreshView = vi.fn(async () => undefined);
     const updateMeshes = vi.fn();

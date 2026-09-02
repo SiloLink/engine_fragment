@@ -813,6 +813,11 @@ export class VirtualFragmentsModel {
     this.tiles.setLodMode(lodMode);
   }
 
+  setItemsGeometryPinned(localIds: number[], pinned: boolean) {
+    const itemIds = this.properties.getItemIdsFromLocalIds(localIds);
+    this.tiles.setItemsGeometryPinned(itemIds, pinned);
+  }
+
   private setupBVH() {
     // @ts-ignore
     THREE.BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;

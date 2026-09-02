@@ -48,4 +48,75 @@ describe("virtual material opacity contract", () => {
     expect(controller.isOpaque(translucent, opaqueOverride)).toBe(true);
     expect(controller.isOpaque(opaque, colorOnly)).toBe(true);
   });
+
+  it("reuses semantically identical preserved highlights", () => {
+    const onTransfer = vi.fn();
+    const controller = new VirtualMaterialController("model", onTransfer);
+    const opacityOverride = {
+      preserveOriginalMaterial: true,
+      _explicitProps: ["opacity", "transparent"],
+    } satisfies Partial<MaterialDefinition>;
+
+    const [first, duplicate] = controller.transfer([
+      material(0.08, opacityOverride),
+      material(0.08, {
+        ...opacityOverride,
+        _explicitProps: ["transparent", "opacity"],
+      }),
+    ]);
+    const [reused] = controller.transfer([material(0.08, opacityOverride)]);
+
+    expect(duplicate).toBe(first);
+    expect(reused).toBe(first);
+    expect(onTransfer.mock.calls[0]?.[0].materialDefinitions).toHaveLength(1);
+    expect(onTransfer.mock.calls[1]?.[0].materialDefinitions).toHaveLength(0);
+  });
+
+  it("keeps preserved highlights separate when their effective overrides differ", () => {
+    const controller = new VirtualMaterialController("model", vi.fn());
+    const [opacityOnly, opacityAndTransparency, differentOpacity, regular] =
+      controller.transfer([
+        material(0.08, {
+          preserveOriginalMaterial: true,
+          _explicitProps: ["opacity"],
+        }),
+        material(0.08, {
+          preserveOriginalMaterial: true,
+          _explicitProps: ["opacity", "transparent"],
+        }),
+        material(0.2, {
+          preserveOriginalMaterial: true,
+          _explicitProps: ["opacity", "transparent"],
+        }),
+        material(0.08),
+      ]);
+
+    expect(
+      new Set([opacityOnly, opacityAndTransparency, differentOpacity, regular]),
+    ).toHaveLength(4);
+  });
+
+  it("compares explicitly overridden colors by value", () => {
+    const controller = new VirtualMaterialController("model", vi.fn());
+    const [first, duplicate, different] = controller.transfer([
+      material(1, {
+        color: new Color(0.1, 0.2, 0.3),
+        preserveOriginalMaterial: true,
+        _explicitProps: ["color"],
+      }),
+      material(1, {
+        color: new Color(0.1, 0.2, 0.3),
+        preserveOriginalMaterial: true,
+        _explicitProps: ["color"],
+      }),
+      material(1, {
+        color: new Color(0.3, 0.2, 0.1),
+        preserveOriginalMaterial: true,
+        _explicitProps: ["color"],
+      }),
+    ]);
+
+    expect(duplicate).toBe(first);
+    expect(different).not.toBe(first);
+  });
 });

@@ -34,6 +34,34 @@ export class MaterialUtils {
     return isSameColor && isSameOpacity && isSameFaces;
   }
 
+  static isSamePreservedHighlight(
+    a: MaterialDefinition,
+    b: MaterialDefinition,
+  ) {
+    if (!a.preserveOriginalMaterial || !b.preserveOriginalMaterial) {
+      return false;
+    }
+
+    const propertiesA = [...new Set(a._explicitProps ?? [])].sort();
+    const propertiesB = [...new Set(b._explicitProps ?? [])].sort();
+    if (propertiesA.length !== propertiesB.length) return false;
+
+    for (let index = 0; index < propertiesA.length; index++) {
+      const property = propertiesA[index];
+      if (property !== propertiesB[index]) return false;
+
+      const valueA = (a as any)[property];
+      const valueB = (b as any)[property];
+      const isSame =
+        property === "color"
+          ? this.checkSameColor(valueA, valueB)
+          : valueA === valueB;
+      if (!isSame) return false;
+    }
+
+    return true;
+  }
+
   private static checkSame(a: any, b: any, fallback: any): boolean {
     if (a === b) {
       return true;

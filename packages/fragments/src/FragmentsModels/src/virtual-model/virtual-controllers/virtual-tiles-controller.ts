@@ -109,6 +109,7 @@ export class VirtualTilesController {
     tempTileDataSize: 6,
     tileIdIncrement: 1,
     tileSizeMultiplier: 10,
+    wireTileSizeMultiplier: 2,
     minTileDimension: 32,
     tileDimensionFactor: 8,
   };
@@ -143,6 +144,7 @@ export class VirtualTilesController {
   private _virtualView: any;
 
   private _lodMode = LodMode.DEFAULT;
+  private readonly _geometryPinnedItems = new Set<number>();
 
   constructor(data: VirtualTileData) {
     this._modelId = data.modelId;
@@ -397,6 +399,17 @@ export class VirtualTilesController {
   setLodMode(lodMode: LodMode) {
     this._lodMode = lodMode;
     this.restart();
+  }
+
+  setItemsGeometryPinned(itemIds: number[], pinned: boolean) {
+    const changedItemIds: number[] = [];
+    for (const itemId of itemIds) {
+      if (this._geometryPinnedItems.has(itemId) === pinned) continue;
+      if (pinned) this._geometryPinnedItems.add(itemId);
+      else this._geometryPinnedItems.delete(itemId);
+      changedItemIds.push(itemId);
+    }
+    if (changedItemIds.length > 0) this.updateVirtualMeshes(changedItemIds);
   }
 
   private init() {
@@ -1050,9 +1063,10 @@ export class VirtualTilesController {
   }
 
   private fetchLodLevel(sample: number) {
+    this.meshes.samples(sample, this._temp.sample);
+    const itemId = this._temp.sample.item();
+
     if (this._lodMode === LodMode.ALL_VISIBLE) {
-      this.meshes.samples(sample, this._temp.sample);
-      const itemId = this._temp.sample.item();
       const isSeen = this._items.visible(itemId);
       if (!isSeen) {
         return CurrentLod.INVISIBLE;
@@ -1066,11 +1080,15 @@ export class VirtualTilesController {
       return CurrentLod.INVISIBLE;
     }
 
-    this.meshes.samples(sample, this._temp.sample);
-    const itemId = this._temp.sample.item();
     const isSeen = this._items.visible(itemId);
     if (!isSeen) {
       return CurrentLod.INVISIBLE;
+    }
+
+    // A geometry pin retains hard clipping and explicit visibility while
+    // bypassing only distance-based LOD reduction.
+    if (this._geometryPinnedItems.has(itemId)) {
+      return CurrentLod.GEOMETRY;
     }
 
     const quality = this._virtualView.graphicQuality;
@@ -1183,6 +1201,8 @@ export class VirtualTilesController {
     let tileDimension = this._tileDimension;
     if (lod === CurrentLod.GEOMETRY) {
       tileDimension *= this._params.tileSizeMultiplier;
+    } else if (lod === CurrentLod.WIRES) {
+      tileDimension *= this._params.wireTileSizeMultiplier;
     }
     return tileDimension;
   }

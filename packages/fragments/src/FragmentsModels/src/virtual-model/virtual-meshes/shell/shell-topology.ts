@@ -92,15 +92,18 @@ export class ShellVertexIndexer {
 }
 
 export class ShellChunkBoundary {
+  assertProfileFits(candidateVertexCount: number) {
+    if (candidateVertexCount <= limitOf2Bytes) return;
+    throw new Error("Fragments: SHELL profile exceeds Uint16 vertex capacity.");
+  }
+
   shouldStartNewChunk(
     currentVertexCount: number,
     candidateVertexCount: number,
   ) {
     if (candidateVertexCount <= limitOf2Bytes) return false;
     if (currentVertexCount === 0) {
-      throw new Error(
-        "Fragments: SHELL profile exceeds Uint16 vertex capacity.",
-      );
+      this.assertProfileFits(candidateVertexCount);
     }
     return true;
   }

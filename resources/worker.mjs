@@ -27015,13 +27015,16 @@ class ShellVertexIndexer {
   }
 }
 class ShellChunkBoundary {
+  assertProfileFits(candidateVertexCount) {
+    if (candidateVertexCount <= limitOf2Bytes)
+      return;
+    throw new Error("Fragments: SHELL profile exceeds Uint16 vertex capacity.");
+  }
   shouldStartNewChunk(currentVertexCount, candidateVertexCount) {
     if (candidateVertexCount <= limitOf2Bytes)
       return false;
     if (currentVertexCount === 0) {
-      throw new Error(
-        "Fragments: SHELL profile exceeds Uint16 vertex capacity."
-      );
+      this.assertProfileFits(candidateVertexCount);
     }
     return true;
   }
@@ -27144,7 +27147,7 @@ class ShellTemplateConstructor {
         this._vertices.rollback(profileStartVertexCount);
         this.setMesh();
         profile = this._topology.get(profileId, this._vertices, false);
-        this._chunkBoundary.shouldStartNewChunk(0, this._vertices.size);
+        this._chunkBoundary.assertProfileFits(this._vertices.size);
       }
       this._triangleAmount += getShellTriangleCount(profile);
     }
@@ -27718,7 +27721,7 @@ class ShellConstructor {
         this._tileIndex++;
         this.startBuffer(meshData);
         profile = this._topology.get(profileId, this._vertices, true);
-        this._chunkBoundary.shouldStartNewChunk(0, this._vertices.size);
+        this._chunkBoundary.assertProfileFits(this._vertices.size);
       }
       this.constructProfile(profile, points);
     }
@@ -32129,6 +32132,7 @@ const _VirtualTilesController = class _VirtualTilesController {
       tempTileDataSize: 6,
       tileIdIncrement: 1,
       tileSizeMultiplier: 10,
+      wireTileSizeMultiplier: 2,
       minTileDimension: 32,
       tileDimensionFactor: 8
     });
@@ -32160,6 +32164,7 @@ const _VirtualTilesController = class _VirtualTilesController {
     __publicField(this, "_changedSamples", 0);
     __publicField(this, "_virtualView");
     __publicField(this, "_lodMode", LodMode.DEFAULT);
+    __publicField(this, "_geometryPinnedItems", /* @__PURE__ */ new Set());
     this._modelId = data.modelId;
     this._boxes = data.boxes;
     this._items = data.items;
@@ -32376,6 +32381,20 @@ const _VirtualTilesController = class _VirtualTilesController {
   setLodMode(lodMode) {
     this._lodMode = lodMode;
     this.restart();
+  }
+  setItemsGeometryPinned(itemIds, pinned) {
+    const changedItemIds = [];
+    for (const itemId of itemIds) {
+      if (this._geometryPinnedItems.has(itemId) === pinned)
+        continue;
+      if (pinned)
+        this._geometryPinnedItems.add(itemId);
+      else
+        this._geometryPinnedItems.delete(itemId);
+      changedItemIds.push(itemId);
+    }
+    if (changedItemIds.length > 0)
+      this.updateVirtualMeshes(changedItemIds);
   }
   init() {
     const shells = new VirtualShellManager(
@@ -32890,10 +32909,10 @@ const _VirtualTilesController = class _VirtualTilesController {
     }
   }
   fetchLodLevel(sample) {
+    this.meshes.samples(sample, this._temp.sample);
+    const itemId = this._temp.sample.item();
     if (this._lodMode === LodMode.ALL_VISIBLE) {
-      this.meshes.samples(sample, this._temp.sample);
-      const itemId2 = this._temp.sample.item();
-      const isSeen2 = this._items.visible(itemId2);
+      const isSeen2 = this._items.visible(itemId);
       if (!isSeen2) {
         return CurrentLod.INVISIBLE;
       }
@@ -32904,11 +32923,12 @@ const _VirtualTilesController = class _VirtualTilesController {
     if (!notClipped) {
       return CurrentLod.INVISIBLE;
     }
-    this.meshes.samples(sample, this._temp.sample);
-    const itemId = this._temp.sample.item();
     const isSeen = this._items.visible(itemId);
     if (!isSeen) {
       return CurrentLod.INVISIBLE;
+    }
+    if (this._geometryPinnedItems.has(itemId)) {
+      return CurrentLod.GEOMETRY;
     }
     const quality = this._virtualView.graphicQuality;
     const dimension = this._boxes.dimensionOf(sample);
@@ -32995,6 +33015,8 @@ const _VirtualTilesController = class _VirtualTilesController {
     let tileDimension = this._tileDimension;
     if (lod === CurrentLod.GEOMETRY) {
       tileDimension *= this._params.tileSizeMultiplier;
+    } else if (lod === CurrentLod.WIRES) {
+      tileDimension *= this._params.wireTileSizeMultiplier;
     }
     return tileDimension;
   }
@@ -33328,6 +33350,26 @@ class MaterialUtils {
     const isSameFaces = this.checkSame(facesA, facesB, RenderedFaces.ONE);
     return isSameColor && isSameOpacity && isSameFaces;
   }
+  static isSamePreservedHighlight(a, b) {
+    if (!a.preserveOriginalMaterial || !b.preserveOriginalMaterial) {
+      return false;
+    }
+    const propertiesA = [...new Set(a._explicitProps ?? [])].sort();
+    const propertiesB = [...new Set(b._explicitProps ?? [])].sort();
+    if (propertiesA.length !== propertiesB.length)
+      return false;
+    for (let index = 0; index < propertiesA.length; index++) {
+      const property = propertiesA[index];
+      if (property !== propertiesB[index])
+        return false;
+      const valueA = a[property];
+      const valueB = b[property];
+      const isSame = property === "color" ? this.checkSameColor(valueA, valueB) : valueA === valueB;
+      if (!isSame)
+        return false;
+    }
+    return true;
+  }
   static checkSame(a, b, fallback) {
     if (a === b) {
       return true;
@@ -33411,13 +33453,14 @@ class VirtualMaterialController {
     return result;
   }
   checkMaterialExists(material, ids) {
-    if (material.preserveOriginalMaterial) {
-      return false;
-    }
     const count = this._list.length;
     for (let i = 0; i < count; i++) {
       const current = this._list[i];
-      const isSame = MaterialUtils.isSame(material, current);
+      const preservesOriginal = Boolean(material.preserveOriginalMaterial);
+      if (preservesOriginal !== Boolean(current.preserveOriginalMaterial)) {
+        continue;
+      }
+      const isSame = preservesOriginal ? MaterialUtils.isSamePreservedHighlight(material, current) : MaterialUtils.isSame(material, current);
       if (isSame) {
         ids.push(i);
         return true;
@@ -82093,6 +82136,10 @@ class VirtualFragmentsModel {
   setLodMode(lodMode) {
     this.tiles.setLodMode(lodMode);
   }
+  setItemsGeometryPinned(localIds, pinned) {
+    const itemIds = this.properties.getItemIdsFromLocalIds(localIds);
+    this.tiles.setItemsGeometryPinned(itemIds, pinned);
+  }
   setupBVH() {
     BufferGeometry.prototype.computeBoundsTree = computeBoundsTree;
     BufferGeometry.prototype.disposeBoundsTree = disposeBoundsTree;
@@ -82780,4 +82827,3 @@ export {
   FragmentsThread,
   thread
 };
-//# sourceMappingURL=worker.mjs.map

@@ -27,7 +27,7 @@ export default defineConfig({
   build: {
     outDir: "./dist/Worker",
     minify: false,
-    sourcemap: true,
+    sourcemap: "hidden",
     lib: {
       entry: path.resolve(
         __dirname,

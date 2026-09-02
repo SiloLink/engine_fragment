@@ -57,6 +57,17 @@ export class ViewManager {
     ]) as Promise<void>;
   }
 
+  async setItemsGeometryPinned(
+    model: FragmentsModel,
+    localIds: number[],
+    pinned: boolean,
+  ) {
+    return model.threads.invoke(model.modelId, "setItemsGeometryPinned", [
+      localIds,
+      pinned,
+    ]) as Promise<void>;
+  }
+
   private getOrthoSize() {
     let orthoSize = this._updateOrthoSizeEvent();
     if (orthoSize) {

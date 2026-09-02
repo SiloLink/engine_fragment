@@ -56,7 +56,7 @@ export class ShellConstructor {
         this._tileIndex++;
         this.startBuffer(meshData);
         profile = this._topology.get(profileId, this._vertices, true);
-        this._chunkBoundary.shouldStartNewChunk(0, this._vertices.size);
+        this._chunkBoundary.assertProfileFits(this._vertices.size);
       }
       this.constructProfile(profile, points);
     }
