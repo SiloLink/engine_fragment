@@ -37,10 +37,10 @@ import {
 } from "../../../../Schema";
 import { ItemConfigController } from "./item-config-controller";
 import { MeshConnection } from "../../multithreading/mesh-connection";
-import { thread } from "../../multithreading/fragments-thread";
 import { RaycastController } from "./raycast-controller";
 import { VirtualMemoryController } from "./virtual-memory-controller";
 import { VirtualMaterialController } from "./virtual-material-controller";
+import { encodeFaceColors } from "../../utils/face-color-encoder";
 
 type VirtualMeshes = Map<RepresentationClass, VirtualMeshManager>;
 
@@ -191,6 +191,7 @@ export class VirtualTilesController {
   }
 
   dispose() {
+    for (const tile of this._tiles.values()) this.releaseTileMemory(tile);
     this._meshConnection.dispose();
     for (const [, mesh] of this._virtualMeshes) {
       mesh.dispose();
@@ -487,20 +488,13 @@ export class VirtualTilesController {
     const noficationNotSentYet = !this.tilesUpdated;
     const samplesUpdated = this._changedSamples >= this._sampleAmount;
     const updateFinished = samplesUpdated && noficationNotSentYet;
-    if (!updateFinished) {
+    if (!updateFinished || !this._virtualView) {
       return;
     }
     this._meshConnection.process({
       tileRequestClass: TileRequestClass.FINISH,
       modelId: this._modelId,
-      // Stamp with the highest seq this worker has seen on incoming
-      // RPCs. Because RPC handlers serialize with the update tick on
-      // the worker (single-threaded JS), any RPC that finished before
-      // this tick has had its state changes processed during it — so
-      // any tile updates emitted in this batch reflect those RPCs'
-      // effects. Main uses the stamp to resolve `forceUpdateFinish`
-      // waiters precisely, no buffer / poll required.
-      seq: thread.lastSeenSeq,
+      renderRevision: this._virtualView.renderRevision,
     });
     this.tilesUpdated = true;
   }
@@ -969,8 +963,7 @@ export class VirtualTilesController {
       const tile = this._tiles.get(tileId);
       if (!tile?.notVirtual) continue;
       this.deleteGeometry(tileId);
-      tile.notVirtual = false;
-      VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory!;
+      this.releaseTileMemory(tile);
       this.buildNewVirtualTile(tile, tileId);
     }
     this._tilesToRebuild.clear();
@@ -980,8 +973,7 @@ export class VirtualTilesController {
     const shouldDelete = this.getShouldDeleteTile(tile);
     if (shouldDelete) {
       this.deleteGeometry(tileId);
-      tile.notVirtual = false;
-      VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory!;
+      this.releaseTileMemory(tile);
       return;
     }
     this._tilesChanged.add(tileId);
@@ -1025,7 +1017,7 @@ export class VirtualTilesController {
   private getKeepUpdating(sampleId: number, time: number) {
     const maxTime = this._params.updateTime;
     const minSamples = this._params.updateSamples;
-    const samplesLeft = sampleId < this._sampleAmount;
+    const samplesLeft = this._changedSamples < this._sampleAmount;
     const passedTime = performance.now() - time;
     const isFirstSamples = sampleId < minSamples;
     const timeLeft = passedTime < maxTime || isFirstSamples;
@@ -1450,6 +1442,12 @@ export class VirtualTilesController {
     VirtualTilesController._graphicMemoryConsumed += tile.usedMemory!;
   }
 
+  private releaseTileMemory(tile: TileData) {
+    if (!tile.notVirtual) return;
+    VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory!;
+    tile.notVirtual = false;
+  }
+
   private fetchTileMatrixOnLoad(tile: TileData) {
     if (tile.location) {
       this._temp.matrix.identity();
@@ -1505,6 +1503,16 @@ export class VirtualTilesController {
     const tileData = this.getTileData(tile);
     this.fetchTileMatrixOnLoad(tile);
     const faceIds = this.getFaceIds(tile);
+    if (tile.objectClass === ObjectClass.SHELL) {
+      // Count the realized GPU attributes before their transfer detaches them.
+      // The canonical face-ID scratch buffer is not uploaded.
+      tile.usedMemory =
+        tile.positionBuffer!.byteLength +
+        tile.indexBuffer!.byteLength +
+        tile.normalBuffer!.byteLength +
+        tile.ids!.byteLength +
+        faceIds.byteLength;
+    }
     this._meshConnection.process({
       tileRequestClass: TileRequestClass.CREATE,
       modelId: this._modelId,
@@ -1526,17 +1534,7 @@ export class VirtualTilesController {
   }
 
   private getFaceIds(tile: TileData) {
-    const tempColor = new THREE.Color();
-    const faceIdBuffer = tile.faceIdBuffer!;
-    const faceIds = new Float32Array(faceIdBuffer.length * 3);
-    for (let i = 0; i < faceIdBuffer.length; i++) {
-      const id = faceIdBuffer[i];
-      tempColor.set(0x000000 + id);
-      faceIds[i * 3] = tempColor.r;
-      faceIds[i * 3 + 1] = tempColor.g;
-      faceIds[i * 3 + 2] = tempColor.b;
-    }
-    return faceIds;
+    return encodeFaceColors(tile.faceIdBuffer!);
   }
 
   private meshData(mesh: VirtualMeshManager, allowVoid: boolean, lod: number) {

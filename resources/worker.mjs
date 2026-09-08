@@ -3283,31 +3283,31 @@ function createColorManagement() {
      * - https://www.russellcottrell.com/photo/matrixCalculator.htm
      */
     spaces: {},
-    convert: function(color, sourceColorSpace, targetColorSpace) {
+    convert: function(color2, sourceColorSpace, targetColorSpace) {
       if (this.enabled === false || sourceColorSpace === targetColorSpace || !sourceColorSpace || !targetColorSpace) {
-        return color;
+        return color2;
       }
       if (this.spaces[sourceColorSpace].transfer === SRGBTransfer) {
-        color.r = SRGBToLinear(color.r);
-        color.g = SRGBToLinear(color.g);
-        color.b = SRGBToLinear(color.b);
+        color2.r = SRGBToLinear(color2.r);
+        color2.g = SRGBToLinear(color2.g);
+        color2.b = SRGBToLinear(color2.b);
       }
       if (this.spaces[sourceColorSpace].primaries !== this.spaces[targetColorSpace].primaries) {
-        color.applyMatrix3(this.spaces[sourceColorSpace].toXYZ);
-        color.applyMatrix3(this.spaces[targetColorSpace].fromXYZ);
+        color2.applyMatrix3(this.spaces[sourceColorSpace].toXYZ);
+        color2.applyMatrix3(this.spaces[targetColorSpace].fromXYZ);
       }
       if (this.spaces[targetColorSpace].transfer === SRGBTransfer) {
-        color.r = LinearToSRGB(color.r);
-        color.g = LinearToSRGB(color.g);
-        color.b = LinearToSRGB(color.b);
+        color2.r = LinearToSRGB(color2.r);
+        color2.g = LinearToSRGB(color2.g);
+        color2.b = LinearToSRGB(color2.b);
       }
-      return color;
+      return color2;
     },
-    workingToColorSpace: function(color, targetColorSpace) {
-      return this.convert(color, this.workingColorSpace, targetColorSpace);
+    workingToColorSpace: function(color2, targetColorSpace) {
+      return this.convert(color2, this.workingColorSpace, targetColorSpace);
     },
-    colorSpaceToWorking: function(color, sourceColorSpace) {
-      return this.convert(color, sourceColorSpace, this.workingColorSpace);
+    colorSpaceToWorking: function(color2, sourceColorSpace) {
+      return this.convert(color2, sourceColorSpace, this.workingColorSpace);
     },
     getPrimaries: function(colorSpace) {
       return this.spaces[colorSpace].primaries;
@@ -3337,13 +3337,13 @@ function createColorManagement() {
       return this.spaces[colorSpace].workingColorSpaceConfig.unpackColorSpace;
     },
     // Deprecated
-    fromWorkingColorSpace: function(color, targetColorSpace) {
+    fromWorkingColorSpace: function(color2, targetColorSpace) {
       warnOnce("ColorManagement: .fromWorkingColorSpace() has been renamed to .workingToColorSpace().");
-      return ColorManagement2.workingToColorSpace(color, targetColorSpace);
+      return ColorManagement2.workingToColorSpace(color2, targetColorSpace);
     },
-    toWorkingColorSpace: function(color, sourceColorSpace) {
+    toWorkingColorSpace: function(color2, sourceColorSpace) {
       warnOnce("ColorManagement: .toWorkingColorSpace() has been renamed to .colorSpaceToWorking().");
-      return ColorManagement2.colorSpaceToWorking(color, sourceColorSpace);
+      return ColorManagement2.colorSpaceToWorking(color2, sourceColorSpace);
     }
   };
   const REC709_PRIMARIES = [0.64, 0.33, 0.3, 0.6, 0.15, 0.06];
@@ -8909,39 +8909,39 @@ class Color {
     }
     let m;
     if (m = /^(\w+)\(([^\)]*)\)/.exec(style)) {
-      let color;
+      let color2;
       const name = m[1];
       const components = m[2];
       switch (name) {
         case "rgb":
         case "rgba":
-          if (color = /^\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(\d*\.?\d+)\s*)?$/.exec(components)) {
-            handleAlpha(color[4]);
+          if (color2 = /^\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*(\d*\.?\d+)\s*)?$/.exec(components)) {
+            handleAlpha(color2[4]);
             return this.setRGB(
-              Math.min(255, parseInt(color[1], 10)) / 255,
-              Math.min(255, parseInt(color[2], 10)) / 255,
-              Math.min(255, parseInt(color[3], 10)) / 255,
+              Math.min(255, parseInt(color2[1], 10)) / 255,
+              Math.min(255, parseInt(color2[2], 10)) / 255,
+              Math.min(255, parseInt(color2[3], 10)) / 255,
               colorSpace
             );
           }
-          if (color = /^\s*(\d+)\%\s*,\s*(\d+)\%\s*,\s*(\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$/.exec(components)) {
-            handleAlpha(color[4]);
+          if (color2 = /^\s*(\d+)\%\s*,\s*(\d+)\%\s*,\s*(\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$/.exec(components)) {
+            handleAlpha(color2[4]);
             return this.setRGB(
-              Math.min(100, parseInt(color[1], 10)) / 100,
-              Math.min(100, parseInt(color[2], 10)) / 100,
-              Math.min(100, parseInt(color[3], 10)) / 100,
+              Math.min(100, parseInt(color2[1], 10)) / 100,
+              Math.min(100, parseInt(color2[2], 10)) / 100,
+              Math.min(100, parseInt(color2[3], 10)) / 100,
               colorSpace
             );
           }
           break;
         case "hsl":
         case "hsla":
-          if (color = /^\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\%\s*,\s*(\d*\.?\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$/.exec(components)) {
-            handleAlpha(color[4]);
+          if (color2 = /^\s*(\d*\.?\d+)\s*,\s*(\d*\.?\d+)\%\s*,\s*(\d*\.?\d+)\%\s*(?:,\s*(\d*\.?\d+)\s*)?$/.exec(components)) {
+            handleAlpha(color2[4]);
             return this.setHSL(
-              parseFloat(color[1]) / 360,
-              parseFloat(color[2]) / 100,
-              parseFloat(color[3]) / 100,
+              parseFloat(color2[1]) / 360,
+              parseFloat(color2[2]) / 100,
+              parseFloat(color2[3]) / 100,
               colorSpace
             );
           }
@@ -9005,10 +9005,10 @@ class Color {
    * @param {Color} color - The color to copy.
    * @return {Color} A reference to this color.
    */
-  copy(color) {
-    this.r = color.r;
-    this.g = color.g;
-    this.b = color.b;
+  copy(color2) {
+    this.r = color2.r;
+    this.g = color2.g;
+    this.b = color2.b;
     return this;
   }
   /**
@@ -9018,10 +9018,10 @@ class Color {
    * @param {Color} color - The color to copy/convert.
    * @return {Color} A reference to this color.
    */
-  copySRGBToLinear(color) {
-    this.r = SRGBToLinear(color.r);
-    this.g = SRGBToLinear(color.g);
-    this.b = SRGBToLinear(color.b);
+  copySRGBToLinear(color2) {
+    this.r = SRGBToLinear(color2.r);
+    this.g = SRGBToLinear(color2.g);
+    this.b = SRGBToLinear(color2.b);
     return this;
   }
   /**
@@ -9031,10 +9031,10 @@ class Color {
    * @param {Color} color - The color to copy/convert.
    * @return {Color} A reference to this color.
    */
-  copyLinearToSRGB(color) {
-    this.r = LinearToSRGB(color.r);
-    this.g = LinearToSRGB(color.g);
-    this.b = LinearToSRGB(color.b);
+  copyLinearToSRGB(color2) {
+    this.r = LinearToSRGB(color2.r);
+    this.g = LinearToSRGB(color2.g);
+    this.b = LinearToSRGB(color2.b);
     return this;
   }
   /**
@@ -9161,10 +9161,10 @@ class Color {
    * @param {Color} color - The color to add.
    * @return {Color} A reference to this color.
    */
-  add(color) {
-    this.r += color.r;
-    this.g += color.g;
-    this.b += color.b;
+  add(color2) {
+    this.r += color2.r;
+    this.g += color2.g;
+    this.b += color2.b;
     return this;
   }
   /**
@@ -9198,10 +9198,10 @@ class Color {
    * @param {Color} color - The color to subtract.
    * @return {Color} A reference to this color.
    */
-  sub(color) {
-    this.r = Math.max(0, this.r - color.r);
-    this.g = Math.max(0, this.g - color.g);
-    this.b = Math.max(0, this.b - color.b);
+  sub(color2) {
+    this.r = Math.max(0, this.r - color2.r);
+    this.g = Math.max(0, this.g - color2.g);
+    this.b = Math.max(0, this.b - color2.b);
     return this;
   }
   /**
@@ -9210,10 +9210,10 @@ class Color {
    * @param {Color} color - The color to multiply.
    * @return {Color} A reference to this color.
    */
-  multiply(color) {
-    this.r *= color.r;
-    this.g *= color.g;
-    this.b *= color.b;
+  multiply(color2) {
+    this.r *= color2.r;
+    this.g *= color2.g;
+    this.b *= color2.b;
     return this;
   }
   /**
@@ -9237,10 +9237,10 @@ class Color {
    * @param {number} alpha - The interpolation factor in the closed interval `[0,1]`.
    * @return {Color} A reference to this color.
    */
-  lerp(color, alpha) {
-    this.r += (color.r - this.r) * alpha;
-    this.g += (color.g - this.g) * alpha;
-    this.b += (color.b - this.b) * alpha;
+  lerp(color2, alpha) {
+    this.r += (color2.r - this.r) * alpha;
+    this.g += (color2.g - this.g) * alpha;
+    this.b += (color2.b - this.b) * alpha;
     return this;
   }
   /**
@@ -9270,9 +9270,9 @@ class Color {
    * @param {number} alpha - The interpolation factor in the closed interval `[0,1]`.
    * @return {Color} A reference to this color.
    */
-  lerpHSL(color, alpha) {
+  lerpHSL(color2, alpha) {
     this.getHSL(_hslA);
-    color.getHSL(_hslB);
+    color2.getHSL(_hslB);
     const h = lerp(_hslA.h, _hslB.h, alpha);
     const s = lerp(_hslA.s, _hslB.s, alpha);
     const l = lerp(_hslA.l, _hslB.l, alpha);
@@ -11580,8 +11580,8 @@ class InstancedMesh extends Mesh {
    * @param {number} index - The instance index.
    * @param {Color} color - The target object that is used to store the method's result.
    */
-  getColorAt(index, color) {
-    color.fromArray(this.instanceColor.array, index * 3);
+  getColorAt(index, color2) {
+    color2.fromArray(this.instanceColor.array, index * 3);
   }
   /**
    * Gets the local transformation matrix of the defined instance.
@@ -11641,11 +11641,11 @@ class InstancedMesh extends Mesh {
    * @param {number} index - The instance index.
    * @param {Color} color - The instance color.
    */
-  setColorAt(index, color) {
+  setColorAt(index, color2) {
     if (this.instanceColor === null) {
       this.instanceColor = new InstancedBufferAttribute(new Float32Array(this.instanceMatrix.count * 3).fill(1), 3);
     }
-    color.toArray(this.instanceColor.array, index * 3);
+    color2.toArray(this.instanceColor.array, index * 3);
   }
   /**
    * Sets the given local transformation matrix to the defined instance. Make sure you set the `needsUpdate` flag of
@@ -12917,12 +12917,12 @@ class BatchedMesh extends Mesh {
    * @param {Color} color - The color to set the instance to.
    * @return {BatchedMesh} A reference to this batched mesh.
    */
-  setColorAt(instanceId, color) {
+  setColorAt(instanceId, color2) {
     this.validateInstanceId(instanceId);
     if (this._colorsTexture === null) {
       this._initColorsTexture();
     }
-    color.toArray(this._colorsTexture.image.data, instanceId * 4);
+    color2.toArray(this._colorsTexture.image.data, instanceId * 4);
     this._colorsTexture.needsUpdate = true;
     return this;
   }
@@ -12933,9 +12933,9 @@ class BatchedMesh extends Mesh {
    * @param {Color} color - The target object that is used to store the method's result.
    * @return {Color} The instance's color.
    */
-  getColorAt(instanceId, color) {
+  getColorAt(instanceId, color2) {
     this.validateInstanceId(instanceId);
-    return color.fromArray(this._colorsTexture.image.data, instanceId * 4);
+    return color2.fromArray(this._colorsTexture.image.data, instanceId * 4);
   }
   /**
    * Sets the visibility of the instance.
@@ -13917,7 +13917,7 @@ var LodMode = /* @__PURE__ */ ((LodMode2) => {
   LodMode2[LodMode2["ALL_GEOMETRY"] = 2] = "ALL_GEOMETRY";
   return LodMode2;
 })(LodMode || {});
-const _MultithreadingHelper = class _MultithreadingHelper {
+class MultithreadingHelper {
   static newThread(url, classic) {
     return classic ? new Worker(url) : new Worker(url, { type: "module" });
   }
@@ -13942,47 +13942,36 @@ const _MultithreadingHelper = class _MultithreadingHelper {
     var _a2, _b2;
     const isTransform = (data == null ? void 0 : data.elements) !== void 0;
     if (isTransform) {
-      return _MultithreadingHelper.transform(data);
+      return MultithreadingHelper.transform(data);
     }
     const isBeam = (data == null ? void 0 : data.origin) !== void 0 && (data == null ? void 0 : data.direction) !== void 0;
     if (isBeam) {
-      return _MultithreadingHelper.beam(data);
+      return MultithreadingHelper.beam(data);
     }
     const isFrustum = (data == null ? void 0 : data.planes) !== void 0;
     if (isFrustum) {
-      return _MultithreadingHelper.frustum(data);
+      return MultithreadingHelper.frustum(data);
     }
     const hasNormal = (data == null ? void 0 : data.normal) !== void 0;
     const hasConstant = (data == null ? void 0 : data.constant) !== void 0;
     const isPlane = hasNormal && hasConstant;
     if (isPlane) {
-      return _MultithreadingHelper.plane(data);
+      return MultithreadingHelper.plane(data);
     }
     const hasNormalSet = ((_a2 = data[0]) == null ? void 0 : _a2.normal) !== void 0;
     const hasConstantSet = ((_b2 = data[0]) == null ? void 0 : _b2.constant) !== void 0;
     const isPlaneSet = hasNormalSet && hasConstantSet;
     if (isPlaneSet) {
-      return _MultithreadingHelper.planeSet(data);
+      return MultithreadingHelper.planeSet(data);
     }
     const hasX = (data == null ? void 0 : data.x) !== void 0;
     const hasY = (data == null ? void 0 : data.y) !== void 0;
     const hasZ = (data == null ? void 0 : data.z) !== void 0;
     const isArray = hasX && hasY && hasZ;
     if (isArray) {
-      return _MultithreadingHelper.array(data);
+      return MultithreadingHelper.array(data);
     }
     return data;
-  }
-  /**
-   * Last seq dispatched. Snapshot at `forceUpdateFinish` call time
-   * to know which seq must settle before we can resolve.
-   */
-  static get lastDispatchedSeq() {
-    return _MultithreadingHelper._seq;
-  }
-  static nextSeq() {
-    _MultithreadingHelper._seq += 1;
-    return _MultithreadingHelper._seq;
   }
   static getExecuteRequest(modelId, method, args) {
     const parameters = Array.from(args);
@@ -13998,8 +13987,8 @@ const _MultithreadingHelper = class _MultithreadingHelper {
   static getRequestContent(input) {
     const content = [];
     for (const request of input.list) {
-      _MultithreadingHelper.setupCreateRequest(request, content);
-      _MultithreadingHelper.setupUpdateRequest(request, content);
+      MultithreadingHelper.setupCreateRequest(request, content);
+      MultithreadingHelper.setupUpdateRequest(request, content);
     }
     return content;
   }
@@ -14010,7 +13999,7 @@ const _MultithreadingHelper = class _MultithreadingHelper {
   }
   static cleanRequests(list) {
     const tasks = [];
-    const helper = _MultithreadingHelper;
+    const helper = MultithreadingHelper;
     for (const request of list) {
       const isFinish = helper.isFinishRequest(request);
       if (!isFinish) {
@@ -14038,7 +14027,7 @@ const _MultithreadingHelper = class _MultithreadingHelper {
     clearInterval(updater);
   }
   static areCoresAvailable(currentThreads) {
-    const capacity = _MultithreadingHelper.getCpuCapacity();
+    const capacity = MultithreadingHelper.getCpuCapacity();
     const availableThreads = Math.max(capacity, 2);
     return currentThreads < availableThreads;
   }
@@ -14057,7 +14046,7 @@ const _MultithreadingHelper = class _MultithreadingHelper {
       }
       return Math.floor(override);
     }
-    const capacity = _MultithreadingHelper.getCpuCapacity();
+    const capacity = MultithreadingHelper.getCpuCapacity();
     return Math.max(capacity, 2);
   }
   static isFinishRequest(request) {
@@ -14108,24 +14097,9 @@ const _MultithreadingHelper = class _MultithreadingHelper {
     this.addAllTileData(request, content);
   }
   static getCreateRequestIds() {
-    return ["positions", "indices", "normals", "itemIds"];
+    return ["positions", "indices", "normals", "itemIds", "faceIds"];
   }
-};
-/**
- * Monotonic sequence counter for RPC fence tracking. Every EXECUTE
- * request gets a fresh seq; the worker tags emitted FINISH tile
- * requests with the highest seq it has processed since the previous
- * FINISH, and main uses that to resolve `forceUpdateFinish` waiters
- * without polling.
- *
- * Module-level rather than per-FragmentsModels because the seq
- * space only needs to be unique across messages a single main
- * thread is sending; multiple FragmentsModels in the same window
- * would race on a shared counter regardless. This is simpler and
- * avoids threading through the helper's API.
- */
-__publicField(_MultithreadingHelper, "_seq", 0);
-let MultithreadingHelper = _MultithreadingHelper;
+}
 class Connection {
   constructor(handleInput) {
     __publicField(this, "_handlers", new ConnectionHandlers());
@@ -26463,10 +26437,10 @@ class ParserHelper {
     const b = material.b() / 255;
     const opacity = material.a() / 255;
     const transparent = material.a() < 255;
-    const color = new Color().setRGB(r, g, b, SRGBColorSpace);
+    const color2 = new Color().setRGB(r, g, b, SRGBColorSpace);
     const renderedFaces = material.renderedFaces();
     return {
-      color,
+      color: color2,
       renderedFaces,
       opacity,
       transparent,
@@ -32071,7 +32045,8 @@ __publicField(_VirtualMemoryController, "_capacity");
 __publicField(_VirtualMemoryController, "_memoryAttributes", [
   "positionBuffer",
   "indexBuffer",
-  "normalBuffer"
+  "normalBuffer",
+  "faceIdBuffer"
 ]);
 __publicField(_VirtualMemoryController, "updateMeshMemory", (mesh) => {
   mesh.usedMemory = 0;
@@ -32087,6 +32062,21 @@ __publicField(_VirtualMemoryController, "updateMeshMemory", (mesh) => {
   _VirtualMemoryController.lockIn(mesh);
 });
 let VirtualMemoryController = _VirtualMemoryController;
+const color = new Color();
+const channels = Float32Array.from(
+  { length: 256 },
+  (_, value) => color.set(value).b
+);
+function encodeFaceColors(faceIds) {
+  const colors = new Float32Array(faceIds.length * 3);
+  for (let i = 0; i < faceIds.length; i++) {
+    const id = faceIds[i];
+    colors[i * 3] = channels[id >>> 16 & 255];
+    colors[i * 3 + 1] = channels[id >>> 8 & 255];
+    colors[i * 3 + 2] = channels[id & 255];
+  }
+  return colors;
+}
 const _VirtualTilesController = class _VirtualTilesController {
   constructor(data) {
     __publicField(this, "meshes");
@@ -32205,6 +32195,8 @@ const _VirtualTilesController = class _VirtualTilesController {
     return mesh.fetchMeshes(id, true);
   }
   dispose() {
+    for (const tile of this._tiles.values())
+      this.releaseTileMemory(tile);
     this._meshConnection.dispose();
     for (const [, mesh] of this._virtualMeshes) {
       mesh.dispose();
@@ -32461,20 +32453,13 @@ const _VirtualTilesController = class _VirtualTilesController {
     const noficationNotSentYet = !this.tilesUpdated;
     const samplesUpdated = this._changedSamples >= this._sampleAmount;
     const updateFinished = samplesUpdated && noficationNotSentYet;
-    if (!updateFinished) {
+    if (!updateFinished || !this._virtualView) {
       return;
     }
     this._meshConnection.process({
       tileRequestClass: TileRequestClass.FINISH,
       modelId: this._modelId,
-      // Stamp with the highest seq this worker has seen on incoming
-      // RPCs. Because RPC handlers serialize with the update tick on
-      // the worker (single-threaded JS), any RPC that finished before
-      // this tick has had its state changes processed during it — so
-      // any tile updates emitted in this batch reflect those RPCs'
-      // effects. Main uses the stamp to resolve `forceUpdateFinish`
-      // waiters precisely, no buffer / poll required.
-      seq: thread.lastSeenSeq
+      renderRevision: this._virtualView.renderRevision
     });
     this.tilesUpdated = true;
   }
@@ -32829,8 +32814,7 @@ const _VirtualTilesController = class _VirtualTilesController {
       if (!(tile == null ? void 0 : tile.notVirtual))
         continue;
       this.deleteGeometry(tileId);
-      tile.notVirtual = false;
-      _VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory;
+      this.releaseTileMemory(tile);
       this.buildNewVirtualTile(tile, tileId);
     }
     this._tilesToRebuild.clear();
@@ -32839,8 +32823,7 @@ const _VirtualTilesController = class _VirtualTilesController {
     const shouldDelete = this.getShouldDeleteTile(tile);
     if (shouldDelete) {
       this.deleteGeometry(tileId);
-      tile.notVirtual = false;
-      _VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory;
+      this.releaseTileMemory(tile);
       return;
     }
     this._tilesChanged.add(tileId);
@@ -32875,7 +32858,7 @@ const _VirtualTilesController = class _VirtualTilesController {
   getKeepUpdating(sampleId, time) {
     const maxTime = this._params.updateTime;
     const minSamples = this._params.updateSamples;
-    const samplesLeft = sampleId < this._sampleAmount;
+    const samplesLeft = this._changedSamples < this._sampleAmount;
     const passedTime = performance.now() - time;
     const isFirstSamples = sampleId < minSamples;
     const timeLeft = passedTime < maxTime || isFirstSamples;
@@ -33217,6 +33200,12 @@ const _VirtualTilesController = class _VirtualTilesController {
   updateMemoryOnTileLoad(tile) {
     _VirtualTilesController._graphicMemoryConsumed += tile.usedMemory;
   }
+  releaseTileMemory(tile) {
+    if (!tile.notVirtual)
+      return;
+    _VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory;
+    tile.notVirtual = false;
+  }
   fetchTileMatrixOnLoad(tile) {
     if (tile.location) {
       this._temp.matrix.identity();
@@ -33264,6 +33253,9 @@ const _VirtualTilesController = class _VirtualTilesController {
     const tileData = this.getTileData(tile);
     this.fetchTileMatrixOnLoad(tile);
     const faceIds = this.getFaceIds(tile);
+    if (tile.objectClass === ObjectClass.SHELL) {
+      tile.usedMemory = tile.positionBuffer.byteLength + tile.indexBuffer.byteLength + tile.normalBuffer.byteLength + tile.ids.byteLength + faceIds.byteLength;
+    }
     this._meshConnection.process({
       tileRequestClass: TileRequestClass.CREATE,
       modelId: this._modelId,
@@ -33284,17 +33276,7 @@ const _VirtualTilesController = class _VirtualTilesController {
     this.updateMemoryOnTileLoad(tile);
   }
   getFaceIds(tile) {
-    const tempColor = new Color();
-    const faceIdBuffer = tile.faceIdBuffer;
-    const faceIds = new Float32Array(faceIdBuffer.length * 3);
-    for (let i = 0; i < faceIdBuffer.length; i++) {
-      const id = faceIdBuffer[i];
-      tempColor.set(0 + id);
-      faceIds[i * 3] = tempColor.r;
-      faceIds[i * 3 + 1] = tempColor.g;
-      faceIds[i * 3 + 2] = tempColor.b;
-    }
-    return faceIds;
+    return encodeFaceColors(tile.faceIdBuffer);
   }
   meshData(mesh, allowVoid, lod) {
     const id = this._temp.representation.id();
@@ -81120,13 +81102,13 @@ class HighlightHelper {
     }
     model.tiles.updateVirtualMeshes(itemIds);
   }
-  setColor(model, items, color) {
-    let normalizedColor = color;
-    if (color && !color.isColor && typeof color.r === "number") {
+  setColor(model, items, color2) {
+    let normalizedColor = color2;
+    if (color2 && !color2.isColor && typeof color2.r === "number") {
       normalizedColor = new Color().setRGB(
-        color.r,
-        color.g,
-        color.b,
+        color2.r,
+        color2.g,
+        color2.b,
         SRGBColorSpace
       );
     }
@@ -81730,8 +81712,8 @@ class VirtualFragmentsModel {
   highlight(items, highlightMaterial) {
     this._highlightHelper.highlight(this, items, highlightMaterial);
   }
-  setColor(items, color) {
-    this._highlightHelper.setColor(this, items, color);
+  setColor(items, color2) {
+    this._highlightHelper.setColor(this, items, color2);
   }
   resetColor(items) {
     this._highlightHelper.resetColor(this, items);
@@ -82515,19 +82497,6 @@ class FragmentsThread {
     __publicField(this, "loading", /* @__PURE__ */ new Set());
     /** Set of model IDs whose in-flight load should abort at the next yield. */
     __publicField(this, "aborting", /* @__PURE__ */ new Set());
-    /**
-     * Highest `seq` this worker has seen on any incoming RPC. Each
-     * main → worker message carries a monotonic `seq` set by the
-     * sender (FragmentsConnection.fetch). When the worker emits a
-     * FINISH tile request, it stamps it with this value so the main
-     * thread can resolve `forceUpdateFinish` waiters without polling.
-     *
-     * Lives on the thread (not the model) because seq is global to
-     * the worker — a single FINISH from any model carries the highest
-     * seq the worker has acknowledged, which is what main needs for
-     * the fence semantics ("everything I've sent up to N is done").
-     */
-    __publicField(this, "lastSeenSeq", 0);
     // It registers all actions from multithreadingRequestClass
     __publicField(this, "controllerManager", new ThreadControllerManager(this));
     __publicField(this, "_connection");
@@ -82543,9 +82512,6 @@ class FragmentsThread {
   }
   useConnection(connection) {
     const handler = async (input) => {
-      if (typeof input.seq === "number" && input.seq > this.lastSeenSeq) {
-        this.lastSeenSeq = input.seq;
-      }
       await this.actions[input.class](input);
     };
     this.connection = new Connection(handler);

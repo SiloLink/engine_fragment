@@ -14,6 +14,19 @@ import { LODMesh } from "../lod";
 import { MultithreadingHelper } from "../multithreading/multithreading-helper";
 import { FragmentsMultiDrawMesh } from "./fragments-multi-draw-mesh";
 
+type ViewCompletion = {
+  firstRevision: number;
+  requested: number;
+  completed: number;
+  failure?: { revision: number; error: unknown };
+};
+
+type ViewFence = {
+  targets: { model: FragmentsModel; revision: number }[];
+  resolve: () => void;
+  reject: (error: unknown) => void;
+};
+
 /**
  * A class that manages the creation and updating of meshes in a Fragments model.
  */
@@ -28,94 +41,87 @@ export class MeshManager {
 
   private readonly updateThreshold = 4;
 
-  /**
-   * Highest seq stamped on any FINISH the worker has emitted to us
-   * so far. Updated by `requests.onFinish`. Monotonically increases.
-   * `forceUpdateFinish` waiters resolve once this catches up to their
-   * snapshotted target seq.
-   */
-  private _lastSettledSeq = 0;
-
-  /**
-   * Pending fence resolvers from `forceUpdateFinish` callers.
-   * Each entry's `targetSeq` is what the caller snapshotted at call
-   * time; once `_lastSettledSeq >= targetSeq`, we drain the queue
-   * to completion and resolve. Sorted insertion order isn't needed
-   * — we walk the whole list on each FINISH.
-   */
-  private _fenceWaiters: { targetSeq: number; resolve: () => void }[] = [];
+  // Unique across model lifetimes, including replacements with the same ID.
+  private _nextViewRevision = 0;
+  private readonly _views = new WeakMap<FragmentsModel, ViewCompletion>();
+  private _fenceWaiters: ViewFence[] = [];
 
   private _onUpdate: () => void;
 
   constructor(onUpdate: () => void) {
     this._onUpdate = onUpdate;
-    this.requests.onFinish = (seq) => this.handleFinish(seq);
+    this.requests.onFinish = () => this.drainAll();
+    this.list.onItemDeleted.add(() => this.settleViewFences());
+    this.list.onItemUpdated.add(() => this.settleViewFences());
+    this.list.onCleared.add(() => this.settleViewFences());
   }
 
-  /**
-   * Wait until every main → worker request issued before this call
-   * has been processed by the worker AND its resulting tile updates
-   * have been applied on main. Replaces the old polling-based
-   * implementation:
-   *
-   *   - **Old**: `setInterval` re-running `update()` every `rate` ms
-   *     until a FINISH arrived, plus a `buffer` setTimeout guarding
-   *     against false-positive FINISHes from prior batches. Floor of
-   *     ~rate + buffer ms even when the worker had nothing to do.
-   *   - **New**: snapshot the next dispatched seq, register a fence
-   *     waiter, resolve the moment a FINISH stamped with `seq >=
-   *     snapshot` lands and the request queue has been drained.
-   *     Zero polling; precise per-call settlement.
-   *
-   * Called from `FragmentsModels.update(true)`.
-   */
-  async forceUpdateFinish() {
-    const targetSeq = MultithreadingHelper.lastDispatchedSeq;
-    // No outbound RPCs have been issued yet, or everything we've sent
-    // has already settled — nothing to wait for. Drain whatever's in
-    // the queue (may be empty) and return.
-    if (this._lastSettledSeq >= targetSeq) {
-      this.drainAll();
-      return;
+  beginViewUpdate(model: FragmentsModel) {
+    const revision = ++this._nextViewRevision;
+    const state = this._views.get(model);
+    if (state) {
+      state.requested = revision;
+    } else {
+      this._views.set(model, {
+        firstRevision: revision,
+        requested: revision,
+        completed: 0,
+      });
     }
-    await new Promise<void>((resolve) => {
-      this._fenceWaiters.push({ targetSeq, resolve });
+    return revision;
+  }
+
+  failViewUpdate(model: FragmentsModel, revision: number, error: unknown) {
+    const state = this._views.get(model);
+    if (state && revision > (state.failure?.revision ?? 0)) {
+      state.failure = { revision, error };
+    }
+    this.settleViewFences();
+  }
+
+  /** Wait for each currently requested model view and its tile changes on main. */
+  async forceUpdateFinish() {
+    const targets: ViewFence["targets"] = [];
+    for (const model of this.list.values()) {
+      const state = this._views.get(model);
+      if (state) targets.push({ model, revision: state.requested });
+    }
+    await new Promise<void>((resolve, reject) => {
+      this._fenceWaiters.push({ targets, resolve, reject });
+      this.drainAll();
+      this.settleViewFences();
     });
   }
 
-  /**
-   * Called by `RequestsManager` whenever a FINISH tile request lands
-   * on main. The FINISH is stamped with the worker's `lastSeenSeq`
-   * at emission time, which is also the highest RPC seq whose effects
-   * are reflected in the batch carrying this FINISH.
-   *
-   * Walks the fence-waiter list and resolves any whose `targetSeq`
-   * has now settled, draining the request queue first so the visual
-   * effects are on screen by the time the awaiter wakes up.
-   */
-  private handleFinish(seq: number | undefined) {
-    if (typeof seq === "number" && seq > this._lastSettledSeq) {
-      this._lastSettledSeq = seq;
-    }
-    // Drain on every FINISH, whether or not anyone is awaiting a
-    // fence. FINISH is the worker's "I'm done with this batch"
-    // signal, which is exactly when we want to flush queued tile
-    // UPDATEs to the renderer — without this, model-load CREATE
-    // tiles, post-LOD UPDATEs, and similar would sit unread until
-    // the next force-flush or interaction-driven `update()` call.
-    // Bounded cost: FINISH only fires once per worker batch, not
-    // per tile request, so this isn't a per-message ripple.
-    this.drainAll();
-    if (this._fenceWaiters.length === 0) return;
-    const ready: (() => void)[] = [];
-    const remaining: { targetSeq: number; resolve: () => void }[] = [];
-    for (const w of this._fenceWaiters) {
-      if (w.targetSeq <= this._lastSettledSeq) ready.push(w.resolve);
-      else remaining.push(w);
-    }
-    if (ready.length === 0) return;
-    this._fenceWaiters = remaining;
-    for (const r of ready) r();
+  private finishView(model: FragmentsModel, revision: number) {
+    const state = this._views.get(model);
+    if (!state || !(revision >= state.firstRevision)) return;
+    state.completed = Math.max(state.completed, revision);
+    if (revision >= state.requested) model._finishProcessing();
+    this.settleViewFences();
+  }
+
+  private settleViewFences() {
+    this._fenceWaiters = this._fenceWaiters.filter((waiter) => {
+      let pending = false;
+      for (const { model, revision } of waiter.targets) {
+        if (this.list.get(model.modelId) !== model) {
+          waiter.reject(
+            new Error(`Fragments: model removed or replaced: ${model.modelId}`),
+          );
+          return false;
+        }
+        const state = this._views.get(model)!;
+        if (state.completed >= revision) continue;
+        if (state.failure && state.failure.revision >= revision) {
+          waiter.reject(state.failure.error);
+          return false;
+        }
+        pending = true;
+      }
+      if (!pending) waiter.resolve();
+      return pending;
+    });
   }
 
   /**
@@ -174,7 +180,7 @@ export class MeshManager {
       const tileObject = model.tiles.get(tileId);
       if (tileObject) this.updateStatus(tileObject, request);
     } else if (tileRequestClass === TileRequestClass.FINISH) {
-      model._finishProcessing();
+      this.finishView(model, request.renderRevision);
     }
   }
 

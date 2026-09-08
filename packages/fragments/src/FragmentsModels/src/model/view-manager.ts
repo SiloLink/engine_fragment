@@ -29,7 +29,14 @@ export class ViewManager {
     const fov = this.setup(meshes, model);
     const frustum = CameraUtils.transform(this._tempFrustum, this._tempMatrix);
     const request: any = this.newViewRequest(frustum, fov, model);
-    await model.threads.fetch(request);
+    const revision = meshes.beginViewUpdate(model);
+    request.view.renderRevision = revision;
+    try {
+      await model.threads.fetch(request);
+    } catch (error) {
+      meshes.failViewUpdate(model, revision, error);
+      throw error;
+    }
   }
 
   useCamera(

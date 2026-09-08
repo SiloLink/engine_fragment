@@ -11,6 +11,7 @@ export class VirtualMemoryController {
     "positionBuffer",
     "indexBuffer",
     "normalBuffer",
+    "faceIdBuffer",
   ];
 
   static get(id: number) {

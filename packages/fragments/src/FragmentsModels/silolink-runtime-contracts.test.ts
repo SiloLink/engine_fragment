@@ -103,6 +103,7 @@ describe("SiloLink Fragments runtime contracts", () => {
     const fragments = new FragmentsModels("worker-url");
     const renderUpdate = vi.spyOn(fragments, "update").mockResolvedValue();
     const model = {
+      modelId: "model",
       _finishProcessing: vi.fn(),
       tiles: new Map(),
       visibleItems: new Set<number>(),
@@ -112,7 +113,7 @@ describe("SiloLink Fragments runtime contracts", () => {
     fragments.models.requests.add([
       {
         modelId: "model",
-        seq: 1,
+        renderRevision: fragments.models.beginViewUpdate(model),
         tileRequestClass: TileRequestClass.FINISH,
       },
     ]);

@@ -110,9 +110,8 @@ export class FragmentsModels {
     graphicsQuality: 0,
     /**
      * @deprecated The polling-based force-flush implementation has
-     * been replaced by a sequence-fence one (`forceUpdateFinish`
-     * resolves the moment a FINISH stamped with the relevant seq
-     * arrives). These knobs are no longer read; kept only to avoid
+     * been replaced by per-model view completion fences. These
+     * knobs are no longer read; kept only to avoid
      * breaking apps that set them.
      */
     forceUpdateRate: 200,
@@ -404,9 +403,7 @@ export class FragmentsModels {
     await Promise.all(modelUpdates);
 
     if (force) {
-      // Sequence-fence based: resolves precisely when every RPC
-      // dispatched up to this call has had its effects flushed to
-      // main and applied. No polling, no buffer.
+      // Each model must finish its requested view and apply its tile changes.
       await this.models.forceUpdateFinish();
     } else {
       this.models.update();
