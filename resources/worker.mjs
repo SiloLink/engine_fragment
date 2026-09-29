@@ -32155,6 +32155,7 @@ const _VirtualTilesController = class _VirtualTilesController {
     __publicField(this, "_virtualView");
     __publicField(this, "_lodMode", LodMode.DEFAULT);
     __publicField(this, "_geometryPinnedItems", /* @__PURE__ */ new Set());
+    __publicField(this, "_updateFailed", false);
     this._modelId = data.modelId;
     this._boxes = data.boxes;
     this._items = data.items;
@@ -32345,7 +32346,11 @@ const _VirtualTilesController = class _VirtualTilesController {
     }
     return result;
   }
-  async update(time) {
+  // Synchronous so that a failure reaches the caller, which reports it
+  // through `failUpdate`.
+  update(time) {
+    if (this._updateFailed)
+      return;
     this.updateTiles(time);
     this.rebuildTiles();
     for (const tileId of this._tilesChanged) {
@@ -32362,6 +32367,24 @@ const _VirtualTilesController = class _VirtualTilesController {
     }
     this._tilesChanged.clear();
     this.notifyUpdateFinished();
+  }
+  /**
+   * Completes the current view with the error that interrupted its update,
+   * so that main-thread waiters for that view reject instead of waiting
+   * forever. Updates stay paused until the sweep restarts, e.g. for a new
+   * view.
+   */
+  failUpdate(error2) {
+    this._updateFailed = true;
+    this.tilesUpdated = true;
+    if (!this._virtualView)
+      return;
+    this._meshConnection.process({
+      tileRequestClass: TileRequestClass.FINISH,
+      modelId: this._modelId,
+      renderRevision: this._virtualView.renderRevision,
+      error: String(error2)
+    });
   }
   raycast(representation, ray, frustum, snap) {
     this._temp.raycastPoints = [];
@@ -32517,6 +32540,7 @@ const _VirtualTilesController = class _VirtualTilesController {
   resetUpdateProcess() {
     this._changedSamples = 0;
     this.tilesUpdated = false;
+    this._updateFailed = false;
   }
   manageRaycast(mesh, repr, ray, frustum, snap) {
     const found = RaycastController.cast(mesh, repr, ray, frustum, snap);
@@ -33017,6 +33041,9 @@ const _VirtualTilesController = class _VirtualTilesController {
   putSampleInTiles(sample, material, tiles) {
     let tileIds = void 0;
     const onSamplePut = (tileData, id) => {
+      if (tileData.objectClass === ObjectClass.SHELL && !tileData.indexCount) {
+        return;
+      }
       const tileId = this.newTileId(sample, material, tileData);
       tileIds = this.getTileIdsWhenSamplePut(tileIds, tileId);
       const tile = this.getTileWhenSamplePut(tileId, tileData, material);
@@ -81940,6 +81967,9 @@ class VirtualFragmentsModel {
     this.tiles.update(time);
     return this.tiles.tilesUpdated;
   }
+  failUpdate(error2) {
+    this.tiles.failUpdate(error2);
+  }
   edit(requests, raw = true) {
     const ids = EditUtils.solveIds(requests, this._nextId);
     this._nextId += ids.length;
@@ -82456,7 +82486,13 @@ class ThreadUpdater {
     const start = performance.now();
     let isUpdated = true;
     for (const [, model] of this._thread.list) {
-      const modelUpdated = model.update(start);
+      let modelUpdated = true;
+      try {
+        modelUpdated = model.update(start);
+      } catch (error2) {
+        console.error(error2);
+        model.failUpdate(error2);
+      }
       isUpdated = isUpdated && modelUpdated;
       const end = performance.now();
       const timePassed = end - start;
