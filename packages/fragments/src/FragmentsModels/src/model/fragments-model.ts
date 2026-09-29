@@ -787,6 +787,7 @@ export class FragmentsModel implements IFragmentsModel<true> {
    * Sets a camera for the model. The model will use it to load tiles dinamically depending on the users view
    * (e.g. hiding items that are not in the view, setting the LOD to far away items, etc).
    * @param camera - The camera to use.
+   * @param viewSize - Screen-space size in pixels that LOD uses, usually the larger dimension of the viewport that renders the model. Must be a positive finite number. If omitted, the larger dimension of the browser window is used.
    */
   useCamera(
     camera: THREE.PerspectiveCamera | THREE.OrthographicCamera,

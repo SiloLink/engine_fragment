@@ -1,11 +1,21 @@
 import * as THREE from "three";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { FragmentsModels } from "./index";
 import { FragmentsModel } from "./src/model/fragments-model";
-import { CurrentLod, TileRequestClass } from "./src/model/model-types";
+import {
+  CurrentLod,
+  MultiThreadingRequestClass,
+  TileRequestClass,
+} from "./src/model/model-types";
+import { GPU } from "./src/utils";
 import { VirtualTilesController } from "./src/virtual-model/virtual-controllers/virtual-tiles-controller";
 
 describe("SiloLink Fragments runtime contracts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
   it("batches wire LODs more broadly without changing geometry tile size", () => {
     const controller = Object.create(VirtualTilesController.prototype) as any;
     controller._tileDimension = 32;
@@ -62,6 +72,39 @@ describe("SiloLink Fragments runtime contracts", () => {
 
     bindCamera.call(model as unknown as FragmentsModel, camera, 1246);
     expect(useCamera).toHaveBeenCalledWith(camera, 1246);
+  });
+
+  it("uses the load view size from the first view after loading", async () => {
+    vi.stubGlobal("window", { innerWidth: 1920, innerHeight: 1080 });
+    vi.spyOn(GPU, "estimateCapacity").mockReturnValue(1);
+    const setup = vi
+      .spyOn(FragmentsModel.prototype, "_setup")
+      .mockResolvedValue(undefined);
+    const fragments = new FragmentsModels("worker-url");
+    fragments.settings.autoCoordinate = false;
+    const fetch = vi
+      .spyOn((fragments as any)._connection, "fetch")
+      .mockResolvedValue({});
+    const camera = new THREE.PerspectiveCamera();
+    const bytes = new Uint8Array([1]);
+
+    await fragments.load(bytes, { modelId: "model", camera, viewSize: 1246 });
+
+    const views = fetch.mock.calls
+      .map(([request]: any[]) => request)
+      .filter(
+        ({ class: type }) => type === MultiThreadingRequestClass.REFRESH_VIEW,
+      );
+    expect(views).toHaveLength(1);
+    expect(views[0].view.viewSize).toBe(1246);
+
+    // An invalid size is rejected before the model is set up or registered.
+    setup.mockClear();
+    await expect(
+      fragments.load(bytes, { modelId: "invalid", camera, viewSize: 0 }),
+    ).rejects.toThrow("viewSize");
+    expect(fragments.models.list.has("invalid")).toBe(false);
+    expect(setup).not.toHaveBeenCalled();
   });
 
   it("installs the dense item identity map during setup", async () => {

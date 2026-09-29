@@ -222,6 +222,7 @@ export class FragmentsModels {
    * @param options - Configuration options for loading the model.
    * @param options.modelId - Unique identifier for the model.
    * @param options.camera - Optional camera to use for model culling and LOD.
+   * @param options.viewSize - Optional screen-space size in pixels that LOD uses with `camera`. See {@link FragmentsModel.useCamera}.
    * @param options.raw - Whether the buffer is raw (uncompressed) or deflated. If omitted, it is auto-detected from the buffer (see {@link isRawBuffer}).
    * @param options.userData - Optional custom data to attach to the model.
    * @param options.virtualModelConfig - Optional configuration for virtual model setup.
@@ -232,6 +233,14 @@ export class FragmentsModels {
     options: {
       modelId: string;
       camera?: THREE.PerspectiveCamera | THREE.OrthographicCamera;
+      /**
+       * Screen-space size in pixels that LOD uses with `camera`, usually the
+       * larger dimension of the viewport that renders the model. It applies
+       * from the first view update after loading. When omitted, LOD uses the
+       * larger dimension of the browser window until a size is given through
+       * {@link FragmentsModel.useCamera}. Ignored without `camera`.
+       */
+      viewSize?: number;
       raw?: boolean;
       userData?: Record<string, any>;
       virtualModelConfig?: VirtualModelConfig;
@@ -273,6 +282,12 @@ export class FragmentsModels {
 
     // Skip model updates until we have the data set
     model.frozen = true;
+
+    // Bind the camera while the model is frozen, so that the first view
+    // update after loading already uses the requested view size.
+    if (options.camera) {
+      model.useCamera(options.camera, options.viewSize);
+    }
 
     model.graphicsQuality = this.settings.graphicsQuality;
 
@@ -320,12 +335,6 @@ export class FragmentsModels {
       throw e;
     } finally {
       this._progressCallbacks.delete(options.modelId);
-    }
-
-    const { camera } = options;
-
-    if (camera) {
-      model.useCamera(camera);
     }
 
     // Model has all the data, so it can start updating
