@@ -106,9 +106,10 @@ export class RequestsManager {
     }
 
     if (tileRequestClass === TileRequestClass.UPDATE) {
-      const overriddenRequest = this.list.find(
-        (request) => request.modelId === modelId && request.tileId === tileId,
-      );
+      // Only the latest queued change of the tile can receive the new state:
+      // a rebuild queues DELETE then CREATE, and that CREATE must not keep
+      // stale data. A trailing DELETE leaves no tile to update.
+      const overriddenRequest = this.findLatestTileRequest(modelId, tileId);
       if (overriddenRequest) {
         if (
           overriddenRequest.tileRequestClass === TileRequestClass.CREATE ||
@@ -120,5 +121,15 @@ export class RequestsManager {
     }
 
     return false;
+  }
+
+  private findLatestTileRequest(modelId: string, tileId: number) {
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      const request = this.list[i];
+      if (request.modelId === modelId && request.tileId === tileId) {
+        return request;
+      }
+    }
+    return undefined;
   }
 }
