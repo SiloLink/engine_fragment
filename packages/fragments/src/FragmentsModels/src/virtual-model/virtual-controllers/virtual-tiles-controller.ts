@@ -1219,6 +1219,12 @@ export class VirtualTilesController {
   ) {
     let tileIds: number | number[] = undefined as any;
     const onSamplePut = (tileData: TileData, id: number) => {
+      // A SHELL chunk without triangles (e.g. an empty shell) has nothing to
+      // draw. Keeping it out of every tile means it is never realized or
+      // sent, and never provides the tile origin.
+      if (tileData.objectClass === ObjectClass.SHELL && !tileData.indexCount) {
+        return;
+      }
       const tileId = this.newTileId(sample, material, tileData);
       tileIds = this.getTileIdsWhenSamplePut(tileIds, tileId);
       const tile = this.getTileWhenSamplePut(tileId, tileData, material);
