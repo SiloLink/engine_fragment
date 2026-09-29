@@ -602,6 +602,10 @@ export class VirtualFragmentsModel {
     return this.tiles.tilesUpdated;
   }
 
+  failUpdate(error: unknown) {
+    this.tiles.failUpdate(error);
+  }
+
   edit(requests: EditRequest[], raw = true) {
     const ids = EditUtils.solveIds(requests, this._nextId);
     this._nextId += ids.length;

@@ -180,7 +180,14 @@ export class MeshManager {
       const tileObject = model.tiles.get(tileId);
       if (tileObject) this.updateStatus(tileObject, request);
     } else if (tileRequestClass === TileRequestClass.FINISH) {
-      this.finishView(model, request.renderRevision);
+      if (request.error === undefined) {
+        this.finishView(model, request.renderRevision);
+      } else {
+        const error = new Error(
+          `Fragments: failed to update the view of model ${modelId}: ${request.error}`,
+        );
+        this.failViewUpdate(model, request.renderRevision, error);
+      }
     }
   }
 

@@ -145,6 +145,7 @@ export class VirtualTilesController {
 
   private _lodMode = LodMode.DEFAULT;
   private readonly _geometryPinnedItems = new Set<number>();
+  private _updateFailed = false;
 
   constructor(data: VirtualTileData) {
     this._modelId = data.modelId;
@@ -365,7 +366,10 @@ export class VirtualTilesController {
     return result;
   }
 
-  async update(time: number) {
+  // Synchronous so that a failure reaches the caller, which reports it
+  // through `failUpdate`.
+  update(time: number) {
+    if (this._updateFailed) return;
     this.updateTiles(time);
     this.rebuildTiles();
     for (const tileId of this._tilesChanged) {
@@ -382,6 +386,24 @@ export class VirtualTilesController {
     }
     this._tilesChanged.clear();
     this.notifyUpdateFinished();
+  }
+
+  /**
+   * Completes the current view with the error that interrupted its update,
+   * so that main-thread waiters for that view reject instead of waiting
+   * forever. Updates stay paused until the sweep restarts, e.g. for a new
+   * view.
+   */
+  failUpdate(error: unknown) {
+    this._updateFailed = true;
+    this.tilesUpdated = true;
+    if (!this._virtualView) return;
+    this._meshConnection.process({
+      tileRequestClass: TileRequestClass.FINISH,
+      modelId: this._modelId,
+      renderRevision: this._virtualView.renderRevision,
+      error: String(error),
+    });
   }
 
   raycast(
@@ -559,6 +581,7 @@ export class VirtualTilesController {
   private resetUpdateProcess() {
     this._changedSamples = 0;
     this.tilesUpdated = false;
+    this._updateFailed = false;
   }
 
   private manageRaycast(

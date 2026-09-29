@@ -60,7 +60,15 @@ export class ThreadUpdater {
     const start = performance.now();
     let isUpdated = true;
     for (const [, model] of this._thread.list) {
-      const modelUpdated = model.update(start);
+      let modelUpdated = true;
+      try {
+        modelUpdated = model.update(start);
+      } catch (error) {
+        // Contain the failure to this model: its current view completes with
+        // the error instead of never finishing, and the others keep updating.
+        console.error(error);
+        model.failUpdate(error);
+      }
       isUpdated = isUpdated && modelUpdated;
       const end = performance.now();
       const timePassed = end - start;

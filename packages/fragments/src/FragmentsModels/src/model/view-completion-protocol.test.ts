@@ -144,6 +144,21 @@ function createProtocolHarness() {
       (request) => request.tileRequestClass === TileRequestClass.FINISH,
     );
 
+  // Runs one tick of the worker's real update loop over every model and
+  // reports whether the loop scheduled its next tick.
+  function tickUpdater() {
+    const { updater } = thread.controllerManager;
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      updater.start();
+      vi.advanceTimersToNextTimer();
+      return vi.getTimerCount() === 1;
+    } finally {
+      updater.stop();
+      vi.useRealTimers();
+    }
+  }
+
   return {
     meshes,
     connection,
@@ -152,6 +167,7 @@ function createProtocolHarness() {
     addModel,
     flushWorkerMessages,
     finishes,
+    tickUpdater,
   };
 }
 
@@ -297,5 +313,65 @@ describe("view completion across the worker protocol", () => {
     ]);
     expect(resolved).toHaveBeenCalledTimes(2);
     expect(model._finishProcessing).toHaveBeenCalledOnce();
+  });
+
+  it("rejects only the view of a model whose update throws and recovers on its next sweep", async () => {
+    const protocol = createProtocolHarness();
+    const broken = protocol.addModel("broken");
+    const healthy = protocol.addModel("healthy");
+    const sampleUpdate = (broken.controller as any).updateMesh;
+    const failure = new Error("fixture sample failed");
+    (broken.controller as any).updateMesh = () => {
+      throw failure;
+    };
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await healthy.view.refreshView(healthy.model, protocol.meshes);
+    const healthyOnly = protocol.meshes.forceUpdateFinish();
+    await broken.view.refreshView(broken.model, protocol.meshes);
+    const failedRevision = broken.workerModel.view.renderRevision;
+    const everyModel = expect(
+      protocol.meshes.forceUpdateFinish(),
+    ).rejects.toThrow(/model broken: Error: fixture sample failed/);
+
+    expect(protocol.tickUpdater()).toBe(true);
+    await protocol.flushWorkerMessages();
+    await Promise.all([healthyOnly, everyModel]);
+
+    expect(protocol.finishes()).toEqual([
+      {
+        tileRequestClass: TileRequestClass.FINISH,
+        modelId: "broken",
+        renderRevision: failedRevision,
+        error: "Error: fixture sample failed",
+      },
+      {
+        tileRequestClass: TileRequestClass.FINISH,
+        modelId: "healthy",
+        renderRevision: healthy.workerModel.view.renderRevision,
+      },
+    ]);
+    expect(broken.model._finishProcessing).not.toHaveBeenCalled();
+    expect(healthy.model._finishProcessing).toHaveBeenCalledOnce();
+    expect(logged).toHaveBeenCalledExactlyOnceWith(failure);
+
+    // A failed sweep stays stopped until a new view restarts it.
+    expect(protocol.tickUpdater()).toBe(true);
+    await protocol.flushWorkerMessages();
+    expect(protocol.finishes()).toHaveLength(2);
+
+    (broken.controller as any).updateMesh = sampleUpdate;
+    await broken.view.refreshView(broken.model, protocol.meshes);
+    const recovered = protocol.meshes.forceUpdateFinish();
+    expect(protocol.tickUpdater()).toBe(true);
+    await protocol.flushWorkerMessages();
+    await recovered;
+
+    expect(protocol.finishes()[2]).toEqual({
+      tileRequestClass: TileRequestClass.FINISH,
+      modelId: "broken",
+      renderRevision: broken.workerModel.view.renderRevision,
+    });
+    expect(broken.model._finishProcessing).toHaveBeenCalledOnce();
   });
 });
