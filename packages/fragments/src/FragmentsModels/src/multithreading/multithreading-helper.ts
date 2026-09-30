@@ -1,3 +1,11 @@
+import {
+  MeshComputeRequest,
+  TileRequest,
+  WireVector,
+  WirePlane,
+  WireFrustum,
+  WireMatrix,
+} from "./protocol";
 import * as THREE from "three";
 
 import {
@@ -16,12 +24,15 @@ export class MultithreadingHelper {
     return setInterval(effect, rate);
   }
 
-  static getMeshComputeRequest(modelId: string, list: any[]) {
+  static getMeshComputeRequest(
+    modelId: string,
+    list: TileRequest[],
+  ): MeshComputeRequest {
     const className = MultiThreadingRequestClass.RECOMPUTE_MESHES;
     return { class: className, modelId, list };
   }
 
-  static planeSet(planes: THREE.Plane[]) {
+  static planeSet(planes: WirePlane[]) {
     const planeSet: THREE.Plane[] = [];
     for (const plane of planes) {
       const newNormal = this.array(plane.normal);
@@ -79,7 +90,7 @@ export class MultithreadingHelper {
     return { class: className, modelId, function: method, parameters };
   }
 
-  static plane(plane: THREE.Plane) {
+  static plane(plane: WirePlane) {
     const newNormal = this.array(plane.normal);
     const newConstant = plane.constant;
     const newPlane = new THREE.Plane(newNormal, newConstant);
@@ -95,14 +106,14 @@ export class MultithreadingHelper {
     return content;
   }
 
-  static array(vector: THREE.Vector3) {
+  static array(vector: WireVector) {
     const array = new THREE.Vector3();
     array.set(vector.x, vector.y, vector.z);
     return array;
   }
 
-  static cleanRequests(list: any[]) {
-    const tasks: any[] = [];
+  static cleanRequests(list: TileRequest[]) {
+    const tasks: TileRequest[] = [];
     const helper = MultithreadingHelper;
     for (const request of list) {
       const isFinish = helper.isFinishRequest(request);
@@ -113,7 +124,7 @@ export class MultithreadingHelper {
     return tasks;
   }
 
-  static frustum(frustum: THREE.Frustum) {
+  static frustum(frustum: WireFrustum) {
     const newPlane = this.planeSet(frustum.planes);
     const [a, b, c, d, e, f] = newPlane;
     return new THREE.Frustum(a, b, c, d, e, f);
@@ -125,9 +136,9 @@ export class MultithreadingHelper {
     return new THREE.Ray(newOrigin, newDirection);
   }
 
-  static transform(matrix: THREE.Matrix4) {
+  static transform(matrix: WireMatrix) {
     const newMatrix = new THREE.Matrix4();
-    newMatrix.copy(matrix);
+    newMatrix.fromArray(matrix.elements);
     return newMatrix;
   }
 
@@ -160,7 +171,7 @@ export class MultithreadingHelper {
     return Math.max(capacity, 2);
   }
 
-  static isFinishRequest(request: any) {
+  static isFinishRequest(request: TileRequest) {
     return request.tileRequestClass === TileRequestClass.FINISH;
   }
 

@@ -20,6 +20,10 @@ export class ConnectionHandlers {
     handler(data);
   }
 
+  fail(requestId: number, error: unknown) {
+    this.run({ requestId, errorInfo: error });
+  }
+
   private newHandler(reject: any, resolve: any) {
     return (response: any) => {
       if (response.errorInfo) {

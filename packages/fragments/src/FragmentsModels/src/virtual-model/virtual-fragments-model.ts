@@ -1,3 +1,4 @@
+import { RenderView } from "../multithreading/protocol";
 import { ByteBuffer } from "flatbuffers";
 import * as THREE from "three";
 
@@ -578,7 +579,7 @@ export class VirtualFragmentsModel {
     await this.tiles.generate(onProgress, throwIfAborted);
   }
 
-  refreshView(view: any) {
+  refreshView(view: RenderView) {
     this.view = view;
     this.tiles.setupView(view);
   }

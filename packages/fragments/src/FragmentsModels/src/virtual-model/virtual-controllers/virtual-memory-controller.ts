@@ -5,7 +5,7 @@ export class VirtualMemoryController {
   private static readonly oneHundredMb = 100000000;
 
   private static _meshes = this.setupMeshes();
-  private static _capacity: number;
+  private static _capacity: number | undefined;
 
   private static readonly _memoryAttributes: (keyof TileData)[] = [
     "positionBuffer",
@@ -46,7 +46,7 @@ export class VirtualMemoryController {
     this.lockIn(mesh);
   };
 
-  static setCapacity(value: number) {
+  static setCapacity(value: number | undefined) {
     if (value === this._capacity) return;
     this._meshes.clear();
     this._meshes = this.setupMeshes(value);

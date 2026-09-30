@@ -1,3 +1,4 @@
+import { TileRequest } from "../multithreading/protocol";
 import * as THREE from "three";
 import { MaterialManager } from "./material-manager";
 import {
@@ -13,6 +14,7 @@ import { LODManager } from "./lod-manager";
 import { LODMesh } from "../lod";
 import { MultithreadingHelper } from "../multithreading/multithreading-helper";
 import { FragmentsMultiDrawMesh } from "./fragments-multi-draw-mesh";
+import { ModelViewUpdateError } from "./model-view-error";
 
 type ViewCompletion = {
   firstRevision: number;
@@ -71,12 +73,19 @@ export class MeshManager {
     return revision;
   }
 
-  failViewUpdate(model: FragmentsModel, revision: number, error: unknown) {
+  failViewUpdate(model: FragmentsModel, revision: number, cause: unknown) {
+    const error = new ModelViewUpdateError(
+      "view-failed",
+      model.modelId,
+      revision,
+      cause,
+    );
     const state = this._views.get(model);
     if (state && revision > (state.failure?.revision ?? 0)) {
       state.failure = { revision, error };
     }
     this.settleViewFences();
+    return error;
   }
 
   /** Wait for each currently requested model view and its tile changes on main. */
@@ -107,7 +116,7 @@ export class MeshManager {
       for (const { model, revision } of waiter.targets) {
         if (this.list.get(model.modelId) !== model) {
           waiter.reject(
-            new Error(`Fragments: model removed or replaced: ${model.modelId}`),
+            new ModelViewUpdateError("model-removed", model.modelId, revision),
           );
           return false;
         }
@@ -158,8 +167,8 @@ export class MeshManager {
     this.updateStatus(mesh, request);
   }
 
-  private processTileRequest(request: any) {
-    const { tileRequestClass, tileId, modelId } = request;
+  private processTileRequest(request: TileRequest) {
+    const { tileRequestClass, modelId } = request;
     const model = this.list.get(modelId);
     if (!model) return;
     if (tileRequestClass === TileRequestClass.CREATE) {
@@ -171,22 +180,19 @@ export class MeshManager {
       this.trackVisibleItems(model, uniqueIds, true);
       model.tiles.set(tile.userData.tileId, tile);
     } else if (tileRequestClass === TileRequestClass.DELETE) {
-      const tile = model.tiles.get(tileId);
+      const tile = model.tiles.get(request.tileId);
       if (tile?.userData.itemIds) {
         this.trackVisibleItems(model, tile.userData.itemIds, false);
       }
-      model.tiles.delete(tileId);
+      model.tiles.delete(request.tileId);
     } else if (tileRequestClass === TileRequestClass.UPDATE) {
-      const tileObject = model.tiles.get(tileId);
+      const tileObject = model.tiles.get(request.tileId);
       if (tileObject) this.updateStatus(tileObject, request);
     } else if (tileRequestClass === TileRequestClass.FINISH) {
       if (request.error === undefined) {
         this.finishView(model, request.renderRevision);
       } else {
-        const error = new Error(
-          `Fragments: failed to update the view of model ${modelId}: ${request.error}`,
-        );
-        this.failViewUpdate(model, request.renderRevision, error);
+        this.failViewUpdate(model, request.renderRevision, request.error);
       }
     }
   }

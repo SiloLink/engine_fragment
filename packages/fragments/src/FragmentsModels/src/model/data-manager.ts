@@ -22,22 +22,22 @@ export class DataManager {
     options?: { keepInScene?: boolean },
   ) {
     meshes.list.delete(model.modelId);
-    await this.requestModelDelete(model);
-    model.threads.delete(model.modelId);
-    if (options?.keepInScene) {
-      // Free the modelId slot in the shared MaterialManager so the
-      // replacement model can register its own definitions without
-      // appending to ours (which would corrupt material indices). The
-      // actual THREE materials in `list` stay alive so the outgoing
-      // tiles keep rendering until `finalizeDispose` runs.
-      meshes.materials.releaseModelSlot(model.modelId);
-      return;
+    try {
+      await this.requestModelDelete(model);
+    } finally {
+      // A failed handshake/transport must not retain its worker, materials or
+      // model ID. Worker deletion can fail before any model was created there.
+      model.threads.delete(model.modelId);
+      if (options?.keepInScene) {
+        meshes.materials.releaseModelSlot(model.modelId);
+      } else {
+        model.object.removeFromParent();
+        this.deleteAllTiles(model);
+        meshes.materials.dispose(model.modelId);
+        alignments.dispose();
+        grids.dispose();
+      }
     }
-    model.object.removeFromParent();
-    this.deleteAllTiles(model);
-    meshes.materials.dispose(model.modelId);
-    alignments.dispose();
-    grids.dispose();
   }
 
   async getBuffer(model: FragmentsModel, raw: boolean) {

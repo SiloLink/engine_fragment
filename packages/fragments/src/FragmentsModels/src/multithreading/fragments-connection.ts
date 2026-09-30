@@ -70,6 +70,7 @@ export class FragmentsConnection extends Connection {
     const amount = this._data.getAmountSafe(thread) - 1;
     this._data.deleteModel(model);
     if (amount === 0) {
+      this.closeConnection(this._data.getPort(thread));
       this._data.deleteThread(thread);
     }
   }

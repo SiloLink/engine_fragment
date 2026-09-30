@@ -53,6 +53,9 @@ class ConnectionHandlers {
     this._list.delete(data.requestId);
     handler(data);
   }
+  fail(requestId, error2) {
+    this.run({ requestId, errorInfo: error2 });
+  }
   newHandler(reject, resolve) {
     return (response) => {
       if (response.errorInfo) {
@@ -14020,7 +14023,7 @@ class MultithreadingHelper {
   }
   static transform(matrix) {
     const newMatrix = new Matrix4();
-    newMatrix.copy(matrix);
+    newMatrix.fromArray(matrix.elements);
     return newMatrix;
   }
   static deleteUpdater(updater) {
@@ -14100,18 +14103,14 @@ class MultithreadingHelper {
     return ["positions", "indices", "normals", "itemIds", "faceIds"];
   }
 }
+const FRAGMENTS_PROTOCOL_VERSION = 1;
+const PROTOCOL_HANDSHAKE_TIMEOUT = 1e4;
 class Connection {
   constructor(handleInput) {
     __publicField(this, "_handlers", new ConnectionHandlers());
     __publicField(this, "_handleInput");
     __publicField(this, "_port");
-    __publicField(this, "onInput", (input) => {
-      if (input.data.toMainThread) {
-        this._handlers.run(input.data);
-        return;
-      }
-      this.manageInput(input.data);
-    });
+    __publicField(this, "_protocols", /* @__PURE__ */ new WeakMap());
     this._handleInput = handleInput;
   }
   fetchMeshCompute(modelId, list) {
@@ -14124,7 +14123,9 @@ class Connection {
     this._handlers.setupInput(input);
     return new Promise((resolve, reject) => {
       this._handlers.set(input.requestId, reject, resolve);
-      this.executeConnection(input, content);
+      this.executeConnection(input, content).catch((error2) => {
+        this._handlers.fail(input.requestId, error2);
+      });
     });
   }
   init(port) {
@@ -14132,7 +14133,47 @@ class Connection {
     this.initConnection(port);
   }
   initConnection(connection) {
-    connection.onmessage = this.onInput;
+    let resolve;
+    const ready = new Promise((done) => {
+      resolve = done;
+    });
+    const state = {
+      ready,
+      settled: false,
+      finish: (error2) => {
+        if (state.settled)
+          return;
+        state.settled = true;
+        state.error = error2;
+        clearTimeout(timeout);
+        resolve(error2);
+      }
+    };
+    const timeout = setTimeout(
+      () => state.finish(
+        new Error("Fragments: worker protocol handshake timed out")
+      ),
+      PROTOCOL_HANDSHAKE_TIMEOUT
+    );
+    this._protocols.set(connection, state);
+    connection.onmessage = (event) => this.onInput(event, state);
+    const hello = {
+      fragmentsProtocol: FRAGMENTS_PROTOCOL_VERSION
+    };
+    try {
+      connection.postMessage(hello);
+    } catch (error2) {
+      state.finish(error2 instanceof Error ? error2 : new Error(String(error2)));
+    }
+  }
+  closeConnection(connection) {
+    const protocol = this._protocols.get(connection);
+    if (protocol) {
+      const error2 = new Error("Fragments: worker connection closed");
+      protocol.finish(error2);
+      protocol.error = error2;
+    }
+    connection.close();
   }
   async fetchConnection(_input) {
     if (!this._port) {
@@ -14142,6 +14183,10 @@ class Connection {
   }
   async executeConnection(input, content) {
     const connectionPort = await this.fetchConnection(input);
+    const protocol = this._protocols.get(connectionPort);
+    await protocol.ready;
+    if (protocol.error)
+      throw protocol.error;
     connectionPort.postMessage(input, content);
   }
   async manageOutput(input) {
@@ -14152,6 +14197,26 @@ class Connection {
       content.push(input.itemLocalIds.buffer);
     }
     connection.postMessage(input, content);
+  }
+  onInput(input, state) {
+    var _a2;
+    if (!state.settled) {
+      const version = (_a2 = input.data) == null ? void 0 : _a2.fragmentsProtocol;
+      const isHello = typeof input.data === "object" && input.data !== null && Object.keys(input.data).length === 1 && typeof version === "number";
+      state.finish(
+        isHello && version === FRAGMENTS_PROTOCOL_VERSION ? void 0 : new Error(
+          `Fragments: worker protocol incompatible (expected ${FRAGMENTS_PROTOCOL_VERSION}, received ${isHello ? version : "invalid handshake"})`
+        )
+      );
+      return;
+    }
+    if (state.error)
+      return;
+    if (input.data.toMainThread) {
+      this._handlers.run(input.data);
+      return;
+    }
+    this.manageInput(input.data);
   }
   async manageConnection(input) {
     try {
@@ -32569,7 +32634,7 @@ const _VirtualTilesController = class _VirtualTilesController {
   }
   getPerspTrueDim(fov, distance) {
     const radFactor = Math.PI / 180;
-    const tan = Math.tan(fov * 0.5 * radFactor);
+    const tan = Math.tan(Number(fov) * 0.5 * radFactor);
     return distance * tan;
   }
   getTileHighlight(tile, locations) {
@@ -82364,23 +82429,15 @@ class ThreadViewRefresher extends ThreadController {
   async execute(input) {
     const model = this.thread.list.get(input.modelId);
     if (model) {
-      this.safeCopyFrustum(input);
-      this.safeCopyPosition(input);
-      this.safeCopyPlanes(input);
-      model.refreshView(input.view);
+      const { view } = input;
+      model.refreshView({
+        ...view,
+        cameraFrustum: MultithreadingHelper.frustum(view.cameraFrustum),
+        cameraPosition: MultithreadingHelper.array(view.cameraPosition),
+        clippingPlanes: MultithreadingHelper.planeSet(view.clippingPlanes),
+        modelPlacement: MultithreadingHelper.transform(view.modelPlacement)
+      });
     }
-  }
-  safeCopyFrustum(input) {
-    const frustum = input.view.cameraFrustum;
-    input.view.cameraFrustum = MultithreadingHelper.frustum(frustum);
-  }
-  safeCopyPosition(input) {
-    const position = input.view.cameraPosition;
-    input.view.cameraPosition = MultithreadingHelper.array(position);
-  }
-  safeCopyPlanes(input) {
-    const planes = input.view.clippingPlanes;
-    input.view.clippingPlanes = MultithreadingHelper.planeSet(planes);
   }
 }
 class ThreadBoxFetcher extends ThreadController {

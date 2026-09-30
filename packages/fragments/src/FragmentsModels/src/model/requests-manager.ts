@@ -1,3 +1,4 @@
+import { TileRequest } from "../multithreading/protocol";
 import { MultiThreadingRequestClass, TileRequestClass } from "./model-types";
 import { MaterialManager } from "./material-manager";
 import { MeshManager } from "./mesh-manager";
@@ -9,7 +10,7 @@ export class RequestsManager {
   /**
    * List of requests.
    */
-  readonly list: any[] = [];
+  list: TileRequest[] = [];
 
   /**
    * Checks if there are any pending requests.
@@ -47,7 +48,7 @@ export class RequestsManager {
    *
    * @param requests - Array of requests to be added.
    */
-  add(requests: any[]) {
+  add(requests: TileRequest[]) {
     for (const request of requests) {
       if (!this.insert(request)) this.list.push(request);
       if (request.tileRequestClass === TileRequestClass.FINISH) {
@@ -67,7 +68,7 @@ export class RequestsManager {
         request.modelId !== modelID ||
         request.tileRequestClass !== TileRequestClass.FINISH,
     );
-    (this.list as any) = list;
+    this.list = list;
   }
 
   /**
@@ -76,9 +77,9 @@ export class RequestsManager {
    * @param request - The request to be inserted.
    * @returns `true` if the request was successfully inserted, otherwise `false`.
    */
-  insert(request: any) {
-    const { modelId, tileId, tileRequestClass, tileData } = request;
-    if (tileId === undefined) return false;
+  insert(request: TileRequest) {
+    if (request.tileRequestClass === TileRequestClass.FINISH) return false;
+    const { modelId, tileId, tileRequestClass } = request;
 
     if (tileRequestClass === TileRequestClass.DELETE) {
       const list = this.list.filter(
@@ -90,7 +91,7 @@ export class RequestsManager {
             request.tileId === tileId
           ),
       );
-      (this.list as any) = list;
+      this.list = list;
     }
 
     if (tileRequestClass === TileRequestClass.CREATE) {
@@ -102,7 +103,7 @@ export class RequestsManager {
             request.tileId === tileId
           ),
       );
-      (this.list as any) = list;
+      this.list = list;
     }
 
     if (tileRequestClass === TileRequestClass.UPDATE) {
@@ -115,7 +116,7 @@ export class RequestsManager {
           overriddenRequest.tileRequestClass === TileRequestClass.CREATE ||
           overriddenRequest.tileRequestClass === TileRequestClass.UPDATE
         )
-          overriddenRequest.tileData = tileData;
+          overriddenRequest.tileData = request.tileData;
         return true;
       }
     }
@@ -126,7 +127,11 @@ export class RequestsManager {
   private findLatestTileRequest(modelId: string, tileId: number) {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const request = this.list[i];
-      if (request.modelId === modelId && request.tileId === tileId) {
+      if (
+        request.tileRequestClass !== TileRequestClass.FINISH &&
+        request.modelId === modelId &&
+        request.tileId === tileId
+      ) {
         return request;
       }
     }

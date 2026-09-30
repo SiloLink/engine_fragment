@@ -1,3 +1,4 @@
+import { RenderView } from "../../multithreading/protocol";
 import * as THREE from "three";
 import {
   TileData,
@@ -135,13 +136,13 @@ export class VirtualTilesController {
       positionCount: 6,
     } as TileData,
     viewDimension: 0,
-    pastFieldOfview: 0,
+    pastFieldOfview: 0 as number | void,
   };
 
   private _currentSample = 0;
   private _virtualPlanes: THREE.Plane[] = [];
   private _changedSamples = 0;
-  private _virtualView: any;
+  private _virtualView!: RenderView;
 
   private _lodMode = LodMode.DEFAULT;
   private readonly _geometryPinnedItems = new Set<number>();
@@ -224,7 +225,7 @@ export class VirtualTilesController {
     this.setupTileVisibilityAndHighlight();
   }
 
-  setupView(view: any) {
+  setupView(view: RenderView) {
     this._virtualView = view;
     VirtualMemoryController.setCapacity(view.meshThreshold);
     this.restart();
@@ -633,9 +634,9 @@ export class VirtualTilesController {
     return tile;
   }
 
-  private getPerspTrueDim(fov: number, distance: number) {
+  private getPerspTrueDim(fov: number | void, distance: number) {
     const radFactor = Math.PI / 180;
-    const tan = Math.tan(fov * 0.5 * radFactor);
+    const tan = Math.tan(Number(fov) * 0.5 * radFactor);
     return distance * tan;
   }
 

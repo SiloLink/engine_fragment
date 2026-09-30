@@ -19,6 +19,33 @@ function finish(meshes: MeshManager, modelId: string, renderRevision: number) {
 }
 
 describe("model view completion", () => {
+  it("preserves model and revision identity independently of the failure message", async () => {
+    const meshes = new MeshManager(() => {});
+    const model = addModel(meshes, "model: a: b");
+    const revision = meshes.beginViewUpdate(model);
+    const cause = new Error("arbitrary diagnostic wording");
+    const failed = expect(meshes.forceUpdateFinish()).rejects.toMatchObject({
+      reason: "view-failed",
+      modelId: model.modelId,
+      renderRevision: revision,
+      cause,
+    });
+    meshes.failViewUpdate(model, revision, cause);
+    await failed;
+  });
+
+  it("carries model identity when a pending view is removed", async () => {
+    const meshes = new MeshManager(() => {});
+    const model = addModel(meshes, "removed");
+    const revision = meshes.beginViewUpdate(model);
+    const failed = expect(meshes.forceUpdateFinish()).rejects.toMatchObject({
+      reason: "model-removed",
+      modelId: "removed",
+      renderRevision: revision,
+    });
+    meshes.list.delete(model.modelId);
+    await failed;
+  });
   it("waits for every model even when a later view completes first", async () => {
     const meshes = new MeshManager(() => {});
     const slow = addModel(meshes, "slow");

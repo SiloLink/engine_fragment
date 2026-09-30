@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { RefreshViewRequest, RenderView } from "../multithreading/protocol";
 import { LodMode, MultiThreadingRequestClass } from "./model-types";
 import { FragmentsModel } from "./fragments-model";
 import { MeshManager } from "./mesh-manager";
@@ -28,14 +29,12 @@ export class ViewManager {
   async refreshView(model: FragmentsModel, meshes: MeshManager) {
     const fov = this.setup(meshes, model);
     const frustum = CameraUtils.transform(this._tempFrustum, this._tempMatrix);
-    const request: any = this.newViewRequest(frustum, fov, model);
     const revision = meshes.beginViewUpdate(model);
-    request.view.renderRevision = revision;
     try {
+      const request = this.newViewRequest(frustum, fov, model, revision);
       await model.threads.fetch(request);
     } catch (error) {
-      meshes.failViewUpdate(model, revision, error);
-      throw error;
+      throw meshes.failViewUpdate(model, revision, error);
     }
   }
 
@@ -97,33 +96,34 @@ export class ViewManager {
     frustum: THREE.Frustum,
     fov: number | void,
     model: FragmentsModel,
-  ) {
-    const view: any = this.newView(frustum, fov, model);
-    const request: any = {};
-    request.class = MultiThreadingRequestClass.REFRESH_VIEW;
-    request.modelId = model.modelId;
-    request.cameraFrustum = frustum;
-    request.view = view;
-    return request;
+    renderRevision: number,
+  ): RefreshViewRequest {
+    return {
+      class: MultiThreadingRequestClass.REFRESH_VIEW,
+      modelId: model.modelId,
+      view: this.newView(frustum, fov, model, renderRevision),
+    };
   }
 
   private newView(
     frustum: THREE.Frustum,
     fov: number | void,
     model: FragmentsModel,
-  ) {
-    const view: any = {};
-    view.cameraFrustum = frustum;
-    view.cameraPosition = this._tempVec.applyMatrix4(this._tempMatrix);
-    view.fov = fov;
-    view.orthogonalDimension = this.getOrthoSize();
-    view.viewSize =
-      this._viewSize ?? Math.max(window.innerWidth, window.innerHeight);
-    view.graphicThreshold = GPU.estimateCapacity();
-    view.graphicQuality = model.graphicsQuality * -1.5 + 2;
-    view.clippingPlanes = this.getPlanes();
-    view.modelPlacement = model.object.matrixWorld;
-    return view;
+    renderRevision: number,
+  ): RenderView {
+    return {
+      renderRevision,
+      cameraFrustum: frustum,
+      cameraPosition: this._tempVec.applyMatrix4(this._tempMatrix),
+      fov,
+      orthogonalDimension: this.getOrthoSize(),
+      viewSize:
+        this._viewSize ?? Math.max(window.innerWidth, window.innerHeight),
+      graphicThreshold: GPU.estimateCapacity(),
+      graphicQuality: model.graphicsQuality * -1.5 + 2,
+      clippingPlanes: this.getPlanes(),
+      modelPlacement: model.object.matrixWorld,
+    };
   }
 
   private setOrtho() {

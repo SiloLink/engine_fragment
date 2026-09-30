@@ -1,3 +1,4 @@
+import { TileRequest } from "./protocol";
 import { Connection } from "./connection";
 import { MultithreadingHelper } from "./multithreading-helper";
 import { VirtualMultithreadingConfig } from "../model/model-types";
@@ -8,7 +9,7 @@ export class MeshConnection {
   private _modelId: string;
   private _threshold = 16;
   private _connection: Connection;
-  private _list: any[] = [];
+  private _list: TileRequest[] = [];
 
   private get needsRefresh() {
     return this._list.length > this._threshold;
@@ -50,7 +51,7 @@ export class MeshConnection {
     this._list = MultithreadingHelper.cleanRequests(this._list);
   }
 
-  process(request: any): void {
+  process(request: TileRequest): void {
     this._list.push(request);
     if (this.needsRefresh) {
       this.refresh();
