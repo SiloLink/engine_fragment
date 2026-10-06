@@ -25,6 +25,7 @@ import {
 import { FragmentsConnection } from "../multithreading/fragments-connection";
 import { MiscHelper } from "../utils";
 import { MeshManager } from "./mesh-manager";
+import { ModelViewUpdateError } from "./model-view-error";
 
 import { DataMap, EditRequest, Event } from "../../../Utils";
 import { Editor } from "../edit";
@@ -77,6 +78,13 @@ export class FragmentsModel implements IFragmentsModel<true> {
    * like {@link getItemsByVisibility} to retrieve seen/unseen elements.
    */
   readonly onViewUpdated = new Event<FragmentsModel>();
+
+  /**
+   * Event triggered when the requested view fails, so that a host waiting
+   * for the model's first view can stop waiting. The error names the model
+   * and the failed render revision.
+   */
+  readonly onViewFailed = new Event<ModelViewUpdateError>();
 
   /**
    * A set of item IDs that are currently visible (i.e. have at least
@@ -1137,6 +1145,14 @@ export class FragmentsModel implements IFragmentsModel<true> {
   _finishProcessing() {
     this._isProcessing = false;
     this.onViewUpdated.trigger(this);
+  }
+
+  /**
+   * Internal method to report that the requested view failed. Don't use this
+   * directly.
+   */
+  _failProcessing(error: ModelViewUpdateError) {
+    this.onViewFailed.trigger(error);
   }
 
   _setDeltaModel(modelId: string) {

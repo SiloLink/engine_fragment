@@ -7,6 +7,7 @@ function addModel(meshes: MeshManager, modelId: string) {
   const model = {
     modelId,
     _finishProcessing: vi.fn(),
+    _failProcessing: vi.fn(),
   } as unknown as FragmentsModel;
   meshes.list.set(modelId, model);
   return model;
@@ -32,6 +33,34 @@ describe("model view completion", () => {
     });
     meshes.failViewUpdate(model, revision, cause);
     await failed;
+  });
+
+  it("reports a failed latest view to its model, but not a stale one", () => {
+    const meshes = new MeshManager(() => {});
+    const model = addModel(meshes, "failing");
+    const stale = meshes.beginViewUpdate(model);
+    const latest = meshes.beginViewUpdate(model);
+
+    meshes.failViewUpdate(model, stale, new Error("stale"));
+    expect(model._failProcessing).not.toHaveBeenCalled();
+
+    meshes.requests.add([
+      {
+        tileRequestClass: TileRequestClass.FINISH,
+        modelId: model.modelId,
+        renderRevision: latest,
+        error: "sample failed",
+      } as any,
+    ]);
+    expect(model._failProcessing).toHaveBeenCalledOnce();
+    expect(model._failProcessing).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "view-failed",
+        modelId: model.modelId,
+        renderRevision: latest,
+      }),
+    );
+    expect(model._finishProcessing).not.toHaveBeenCalled();
   });
 
   it("carries model identity when a pending view is removed", async () => {

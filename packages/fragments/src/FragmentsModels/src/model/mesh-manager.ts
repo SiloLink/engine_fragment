@@ -84,6 +84,9 @@ export class MeshManager {
     if (state && revision > (state.failure?.revision ?? 0)) {
       state.failure = { revision, error };
     }
+    // Like completion, a failure of the latest requested view reaches the
+    // model itself; a stale revision's failure does not.
+    if (state && revision >= state.requested) model._failProcessing(error);
     this.settleViewFences();
     return error;
   }
