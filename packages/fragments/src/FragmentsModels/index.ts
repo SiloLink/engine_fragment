@@ -252,6 +252,13 @@ export class FragmentsModels {
        * from the default pool. Throws if the group was not declared.
        */
       threadGroup?: string;
+      /**
+       * Keeps the model frozen after loading, so that no view is requested
+       * until the caller sets {@link FragmentsModel.frozen} to `false`. A
+       * caller that first applies visibility or colors then gets first tiles
+       * that already carry that state. Defaults to `false`.
+       */
+      frozen?: boolean;
     },
   ) {
     // Record the model's group before we issue any worker request so the
@@ -337,8 +344,9 @@ export class FragmentsModels {
       this._progressCallbacks.delete(options.modelId);
     }
 
-    // Model has all the data, so it can start updating
-    model.frozen = false;
+    // Model has all the data, so it can start updating unless the caller
+    // keeps it frozen until its state is applied.
+    model.frozen = options.frozen ?? false;
 
     this.onModelLoaded.trigger(model);
 

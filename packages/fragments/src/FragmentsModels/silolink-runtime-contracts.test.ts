@@ -107,6 +107,37 @@ describe("SiloLink Fragments runtime contracts", () => {
     expect(setup).not.toHaveBeenCalled();
   });
 
+  it("keeps a model frozen after loading when asked, until the caller lets it run", async () => {
+    vi.stubGlobal("window", { innerWidth: 1920, innerHeight: 1080 });
+    vi.spyOn(GPU, "estimateCapacity").mockReturnValue(1);
+    vi.spyOn(FragmentsModel.prototype, "_setup").mockResolvedValue(undefined);
+    const fragments = new FragmentsModels("worker-url");
+    fragments.settings.autoCoordinate = false;
+    const fetch = vi
+      .spyOn((fragments as any)._connection, "fetch")
+      .mockResolvedValue({});
+    const camera = new THREE.PerspectiveCamera();
+    const views = () =>
+      fetch.mock.calls
+        .map(([request]: any[]) => request)
+        .filter(
+          ({ class: type }) => type === MultiThreadingRequestClass.REFRESH_VIEW,
+        );
+
+    const model = await fragments.load(new Uint8Array([1]), {
+      modelId: "model",
+      camera,
+      frozen: true,
+    });
+
+    // The caller applies its state first; no view has been requested yet.
+    expect(model.frozen).toBe(true);
+    expect(views()).toHaveLength(0);
+
+    model.frozen = false;
+    expect(views()).toHaveLength(1);
+  });
+
   it("installs the dense item identity map during setup", async () => {
     const fragments = new FragmentsModels("worker-url");
     const invoke = vi.fn(async () => {
