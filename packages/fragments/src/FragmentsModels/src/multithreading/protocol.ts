@@ -9,7 +9,7 @@ import {
 
 // Bump when either side changes the wire contract incompatibly. Both entry
 // points build this module; a separately hosted worker must match at runtime.
-export const FRAGMENTS_PROTOCOL_VERSION = 1;
+export const FRAGMENTS_PROTOCOL_VERSION = 2;
 export const PROTOCOL_HANDSHAKE_TIMEOUT = 10_000;
 
 export interface ProtocolHello {
@@ -18,7 +18,7 @@ export interface ProtocolHello {
 
 export interface RenderView {
   renderRevision: number;
-  cameraFrustum: THREE.Frustum;
+  cameraFrustum: THREE.Frustum | null;
   cameraPosition: THREE.Vector3;
   clippingPlanes: THREE.Plane[];
   modelPlacement: THREE.Matrix4;
@@ -39,7 +39,7 @@ export type RenderViewMessage = Omit<
   RenderView,
   "cameraFrustum" | "cameraPosition" | "clippingPlanes" | "modelPlacement"
 > & {
-  cameraFrustum: WireFrustum;
+  cameraFrustum: WireFrustum | null;
   cameraPosition: WireVector;
   clippingPlanes: WirePlane[];
   modelPlacement: WireMatrix;

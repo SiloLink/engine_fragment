@@ -83,9 +83,21 @@ export class MaterialManager {
     return material;
   }
 
-  addDefinitions(modelID: string, materials: MaterialDefinition[]) {
+  /**
+   * Appends material definitions for a model. `firstId`, when given, is the
+   * id the worker assigned to `materials[0]`; definitions at or above it are
+   * ones the worker has reclaimed (see #299) and are replaced.
+   */
+  addDefinitions(
+    modelID: string,
+    materials: MaterialDefinition[],
+    firstId?: number,
+  ) {
     const definitions = this._definitions.get(modelID);
     if (definitions) {
+      if (firstId !== undefined && firstId < definitions.length) {
+        definitions.length = firstId;
+      }
       definitions.push(...materials);
     } else {
       this._definitions.set(modelID, materials);
@@ -190,6 +202,11 @@ export class MaterialManager {
         userData: { customId: data.customId, localId: data.localId },
         depthTest: data.depthTest ?? true,
         depthWrite: data.depthWrite ?? true,
+        polygonOffset:
+          (data.polygonOffsetFactor ?? 0) !== 0 ||
+          (data.polygonOffsetUnits ?? 0) !== 0,
+        polygonOffsetFactor: data.polygonOffsetFactor ?? 0,
+        polygonOffsetUnits: data.polygonOffsetUnits ?? 0,
         side: data.renderedFaces === 1 ? THREE.DoubleSide : THREE.FrontSide,
       });
     } else if (objectClass === ObjectClass.LINE) {

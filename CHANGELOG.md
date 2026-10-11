@@ -2,8 +2,18 @@
 
 ## Unreleased
 
+### Bug Fixes
+
+* Upgrade the maintained runtime to upstream 3.4.8, including worker rotation, view-change gating and lifecycle fixes.
+* Reject every waiting caller when a coalesced forced update fails.
+* `setSample()` passed `high === 0` (a highlight-derived value, true for almost every non-highlighted sample) as the `visible` argument to `updateTile()`, instead of the method's own `vis` parameter (the real value `VisibilityHelper.setVisible()`/`toggleVisible()` compute from `model.itemConfig`). On models where the affected samples' LOD state doesn't otherwise change on the same tick, this means a `setVisible()`/`toggleVisible()` call updates the model's own visibility state (`getVisible()` reflects it correctly) without ever updating the corresponding tile's rendered geometry - most reliably observed on large (10k+ item) models, where the correct LOD-driven `updateVisible()` path is less frequently re-entered for the same samples than on small models.
+* Reuse identical preserved highlight materials across items and repeated updates, while keeping depth, transparency and inheritance settings distinct.
+* Settle forced updates when the scene is empty or the last model is removed, without waiting for a worker FINISH that can no longer arrive.
+
 ### ⚠ BREAKING CHANGES
 
+* Main and worker bundles use protocol version 2 for reclaimable material IDs and must be upgraded together.
+* Await `SingleThreadedFragmentsModel.ready` before reading model data.
 * `split`/`extract`: have become `async`, have changed signature (including return types) and are scoped under `IfcSplitter`, exposed events (`onProgress`, `onSplitsResolved`, `onExtractWarning`) instead of console logs.
 * `extract` now throws if no targets to extract were found, instead of logging and returning without producing an output file
 * `split` now throws a `RangeError` unless `numGroups` is a positive integer. The previous 32-group ceiling is gone: group membership is no longer stored as a `1 << g` bitmask, so any number of splits is supported (bounded in practice by the process' open file descriptor limit, one per group).

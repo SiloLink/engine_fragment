@@ -27,7 +27,12 @@ const DELETED = Symbol("deleted index");
  */
 type IndexSource =
   | { kind: "fb"; fb: ModelIndex }
-  | { kind: "raw"; data: RawIndexData; numberKeysArray: Uint32Array | null; numberValuesArray: Uint32Array | null };
+  | {
+      kind: "raw";
+      data: RawIndexData;
+      numberKeysArray: Uint32Array | null;
+      numberValuesArray: Uint32Array | null;
+    };
 
 interface IndexCacheEntry {
   source: IndexSource;
@@ -54,6 +59,13 @@ interface IndexCacheEntry {
  * Stored indexes are cached for the model's lifetime. Pending indexes are
  * cached per "request batch" (invalidated when `requests.length` changes,
  * which covers push, undo, redo, and `selectRequest`).
+ *
+ * Performance note: index reads cross the worker boundary by structured
+ * clone. Typed arrays clone at memcpy speed, so number-keyed indexes are
+ * cheap at any size; the expensive part of string keys is decoding the
+ * strings, not the crossing itself. For large indexes with long string
+ * keys, hash the keys to uint32 at build time and store the number-keyed
+ * index instead (see the discussion in #250).
  */
 export class VirtualIndexesController {
   private readonly _vm: VirtualFragmentsModel;
@@ -326,9 +338,7 @@ export class VirtualIndexesController {
     }
 
     const numberKeysArray =
-      keyType === "number"
-        ? Uint32Array.from(data.keys as number[])
-        : null;
+      keyType === "number" ? Uint32Array.from(data.keys as number[]) : null;
     const numberValuesArray =
       valueType === "number" && data.values
         ? Uint32Array.from(data.values as number[])
@@ -376,7 +386,9 @@ export class VirtualIndexesController {
   }
 
   private numberValuesArray(src: IndexSource): Uint32Array | null {
-    return src.kind === "fb" ? src.fb.numberValuesArray() : src.numberValuesArray;
+    return src.kind === "fb"
+      ? src.fb.numberValuesArray()
+      : src.numberValuesArray;
   }
 
   private endAt(src: IndexSource, i: number): number {
@@ -417,7 +429,10 @@ export class VirtualIndexesController {
     return map;
   }
 
-  private sliceBounds(entry: IndexCacheEntry, position: number): [number, number] {
+  private sliceBounds(
+    entry: IndexCacheEntry,
+    position: number,
+  ): [number, number] {
     const { source, info } = entry;
     if (info.mode === "oneToNNonLinear") {
       const start = this.startAt(source, position);
@@ -486,10 +501,7 @@ export class VirtualIndexesController {
     const map = new Map<string | number, number[] | string[]>();
     const { source, info } = entry;
 
-    const pushKey = (
-      value: string | number,
-      key: string | number,
-    ): void => {
+    const pushKey = (value: string | number, key: string | number): void => {
       const existing = map.get(value);
       if (existing) {
         (existing as Array<string | number>).push(key);
@@ -497,9 +509,7 @@ export class VirtualIndexesController {
       }
       map.set(
         value,
-        info.keyType === "number"
-          ? ([key] as number[])
-          : ([key] as string[]),
+        info.keyType === "number" ? ([key] as number[]) : ([key] as string[]),
       );
     };
 

@@ -130,6 +130,24 @@ export type MaterialDefinition = {
    */
   depthWrite?: boolean;
 
+  /**
+   * Depth-bias factor mapped to THREE's polygonOffsetFactor. When either
+   * this or polygonOffsetUnits is a non-zero number, polygonOffset is
+   * enabled on the produced material. Useful to resolve z-fighting between
+   * exactly coplanar faces (e.g. an element sitting exactly on the surface
+   * that hosts it).
+   * @default 0 (no depth bias)
+   */
+  polygonOffsetFactor?: number;
+
+  /**
+   * Depth-bias units mapped to THREE's polygonOffsetUnits. When either
+   * this or polygonOffsetFactor is a non-zero number, polygonOffset is
+   * enabled on the produced material.
+   * @default 0 (no depth bias)
+   */
+  polygonOffsetUnits?: number;
+
   /** The local ID of the material */
   localId?: number;
 
@@ -501,10 +519,24 @@ export type GridAxisData = {
 
 export type GridData = {
   id: number;
+  /**
+   * The IFC GlobalId of the grid. Optional because `GridsController` rebuilds
+   * this type with `JSON.parse` from the "data" attribute of already-exported
+   * .frag files, which carry no guid, and because IFCGRID entities with an
+   * unset GlobalId produce no guid either.
+   */
+  guid?: string;
   transform: number[];
   uAxes: GridAxisData[];
   vAxes: GridAxisData[];
   wAxes: GridAxisData[];
+  /**
+   * Grid axes whose curve type the importer cannot represent yet (only
+   * point-list curves like IFCPOLYLINE and IFCINDEXEDPOLYCURVE are supported;
+   * e.g. IFCCIRCLE, IFCLINE or IFCTRIMMEDCURVE axes end up here). Optional so
+   * data serialized before this field existed still matches the type.
+   */
+  unsupportedAxes?: { tag: string; curveType: string }[];
 };
 
 /** Interface representing the Coordinate Reference System (CRS) data extracted from an IFC model's IFCPROJECTEDCRS and IFCMAPCONVERSION entities. */

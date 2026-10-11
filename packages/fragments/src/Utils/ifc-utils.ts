@@ -6,18 +6,24 @@ export class FragmentsIfcUtils {
     webIfc: WEBIFC.IfcAPI,
     item: any,
     // We can pass predefined units factor to avoid recalculating it
-    unitsFactor = this.getUnitsFactor(webIfc)
+    unitsFactor = this.getUnitsFactor(webIfc),
   ) {
-    const placementId = item.ObjectPlacement.value;
-    const placement = webIfc.GetLine(0, placementId);
     const ifcResult = new THREE.Matrix4();
     ifcResult.identity();
-    this.getAbsolutePlacementRecursively(
-      webIfc,
-      placement,
-      ifcResult,
-      unitsFactor
-    );
+
+    // ObjectPlacement is optional in the IFC schema (e.g. IFCGRID and
+    // IFCSPACE can omit it). When it's missing, fall back to the identity
+    // placement; the IFC → three.js basis change below still applies.
+    const placementId = item.ObjectPlacement?.value;
+    if (placementId !== null && placementId !== undefined) {
+      const placement = webIfc.GetLine(0, placementId);
+      this.getAbsolutePlacementRecursively(
+        webIfc,
+        placement,
+        ifcResult,
+        unitsFactor,
+      );
+    }
 
     // Transforms ifc coord system to three.js coord system
     // z = -y
@@ -33,7 +39,7 @@ export class FragmentsIfcUtils {
   static getUnitsFactor(ifcApi: WEBIFC.IfcAPI) {
     const unitAssignmentIds = ifcApi.GetLineIDsWithType(
       0,
-      WEBIFC.IFCUNITASSIGNMENT
+      WEBIFC.IFCUNITASSIGNMENT,
     );
 
     let result = 1;
@@ -74,7 +80,7 @@ export class FragmentsIfcUtils {
     webIfc: WEBIFC.IfcAPI,
     placement: any,
     result: THREE.Matrix4,
-    unitsFactor: number
+    unitsFactor: number,
   ) {
     // Current relative placement
     const relativePlacementId = placement.RelativePlacement.value;
@@ -142,7 +148,7 @@ export class FragmentsIfcUtils {
       webIfc,
       parentPlacement,
       result,
-      unitsFactor
+      unitsFactor,
     );
   }
 }

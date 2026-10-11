@@ -10,6 +10,7 @@ function createTilesHarness() {
   const controller = Object.create(VirtualTilesController.prototype) as any;
   const visible = vi.fn(() => true);
 
+  controller._outsideMask = new Uint8Array(1);
   controller._lodMode = LodMode.DEFAULT;
   controller._geometryPinnedItems = new Set<number>();
   controller._temp = {

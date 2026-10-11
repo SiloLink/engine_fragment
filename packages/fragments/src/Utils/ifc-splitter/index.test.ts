@@ -2,11 +2,15 @@ import { readFile } from "fs/promises";
 import * as path from "path";
 import { expect, test, vi } from "vitest";
 import {
+  ELEMENT_TYPES,
   IfcSplitter,
+  IfcSplitterConfig,
   IfcSplitterGroupsEvent,
   IfcSplitterIO,
   IfcSplitterProgressEvent,
   IfcSplitterWarningEvent,
+  listIdxByType,
+  SPATIAL_TYPES,
 } from ".";
 import { SingleThreadedFragmentsModel } from "../../FragmentsModels";
 import { IfcImporter } from "../../Importers";
@@ -23,19 +27,21 @@ const assetDir = path.resolve(
 
 const webIfcDir = path.dirname(import.meta.resolve("web-ifc"));
 
-const syntheticIfcWithWalls = (wallCount: number) =>
+const syntheticIfc = (types: string[]) =>
   [
     "ISO-10303-21;",
     "HEADER;",
     "ENDSEC;",
     "DATA;",
-    ...Array.from(
-      { length: wallCount },
-      (_, i) => `#${i + 1}=IFCWALL('guid${i + 1}',$,$,$,$,$,$,$);`,
+    ...types.map(
+      (type, i) => `#${i + 1}=${type}('guid${i + 1}',$,$,$,$,$,$,$);`,
     ),
     "ENDSEC;",
     "END-ISO-10303-21;",
   ].join("\n");
+
+const syntheticIfcWithWalls = (wallCount: number) =>
+  syntheticIfc(new Array<string>(wallCount).fill("IFCWALL"));
 
 interface SinkState {
   text: string;
@@ -96,6 +102,142 @@ class MemoryIO implements IfcSplitterIO {
   }
 }
 
+/** The config the constructor merged with the defaults */
+const mergedConfigOf = (config?: IfcSplitterConfig) =>
+  // protected field
+  // eslint-disable-next-line dot-notation
+  new IfcSplitter(new MemoryIO(""), config)["config"];
+
+test.each<[string, readonly string[]]>([
+  ["ELEMENT_TYPES", ELEMENT_TYPES],
+  ["SPATIAL_TYPES", SPATIAL_TYPES],
+])("%s is frozen", (_, types) => {
+  const mutable = types as string[];
+  const before = [...types];
+
+  expect(Object.isFrozen(types)).toBe(true);
+  // Modules are strict mode, so a write to a frozen array throws instead of
+  // failing silently.
+  expect(() => mutable.push("IFCMYELEMENT")).toThrow(TypeError);
+  expect(() => {
+    mutable[0] = "IFCMYELEMENT";
+  }).toThrow(TypeError);
+  expect(() => mutable.pop()).toThrow(TypeError);
+  expect(types).toEqual(before);
+});
+
+test.each<[string, IfcSplitterConfig | undefined]>([
+  ["is omitted", undefined],
+  ["is empty", {}],
+  [
+    "declares its fields out as undefined",
+    {
+      elementTypes: undefined,
+      spatialTypes: undefined,
+      listArgIndex: undefined,
+    },
+  ],
+])("config falls back to the defaults when it %s", (_, config) => {
+  const merged = mergedConfigOf(config);
+
+  expect(merged.elementTypes).toEqual(new Set(ELEMENT_TYPES));
+  expect(merged.spatialTypes).toEqual(new Set(SPATIAL_TYPES));
+  expect(merged.listArgIndex).toBe(listIdxByType);
+});
+
+test("config overrides only the fields it declares", () => {
+  const elementTypes = ["IFCANNOTATION"];
+  const listArgIndex = () => 1;
+
+  const merged = mergedConfigOf({ elementTypes, listArgIndex });
+
+  expect(merged.elementTypes).toEqual(new Set(elementTypes));
+  expect(merged.listArgIndex).toBe(listArgIndex);
+  expect(merged.spatialTypes).toEqual(new Set(SPATIAL_TYPES));
+});
+
+// The merged config has to actually reach the passes that use it, so each
+// option is checked against the lines it puts in (or keeps out of) the output.
+const linesOf = (state: SinkState | undefined) =>
+  [...state!.text.matchAll(/^#\d+=\w+/gm)].map(([line]) => line);
+
+test("elementTypes decides what counts as a splittable element", async () => {
+  const source = syntheticIfc(["IFCWALL", "IFCANNOTATION"]);
+  const [byDefault, extended] = await Promise.all(
+    [undefined, { elementTypes: ["IFCANNOTATION"] }].map(async (config) => {
+      const io = new MemoryIO(source);
+      await new IfcSplitter(io, config).split("in.ifc", 1, () => "out.ifc");
+      return linesOf(io.sinks.get("out.ifc"));
+    }),
+  );
+
+  expect(byDefault).toEqual(["#1=IFCWALL"]);
+  expect(extended).toEqual(["#2=IFCANNOTATION"]);
+});
+
+test("spatialTypes decides what is shared across every group", async () => {
+  const source = syntheticIfc(["IFCWALL", "IFCWALL", "IFCBUILDINGSTOREY"]);
+  const [byDefault, none] = await Promise.all(
+    [undefined, { spatialTypes: [] }].map(async (config) => {
+      const io = new MemoryIO(source);
+      await new IfcSplitter(io, config).split(
+        "in.ifc",
+        2,
+        (groupId) => `out_${groupId}.ifc`,
+      );
+      return [...io.sinks.values()].map(linesOf);
+    }),
+  );
+
+  expect(byDefault).toEqual([
+    ["#1=IFCWALL", "#3=IFCBUILDINGSTOREY"],
+    ["#2=IFCWALL", "#3=IFCBUILDINGSTOREY"],
+  ]);
+  expect(none).toEqual([["#1=IFCWALL"], ["#2=IFCWALL"]]);
+});
+
+test("listArgIndex returning undefined skips the type entirely", async () => {
+  const source = [
+    "ISO-10303-21;",
+    "HEADER;",
+    "ENDSEC;",
+    "DATA;",
+    "#1=IFCWALL('guid1',$,$,$,$,$,$,$);",
+    "#2=IFCPROPERTYSET('guid2',$,'Pset',$,(#3));",
+    "#3=IFCPROPERTYSINGLEVALUE('P',$,IFCLABEL('v'),$);",
+    "#4=IFCRELDEFINESBYPROPERTIES('guid4',$,$,$,(#1),#2);",
+    "ENDSEC;",
+    "END-ISO-10303-21;",
+  ].join("\n");
+  const [byDefault, skipped] = await Promise.all(
+    [
+      undefined,
+      {
+        // Delegating to the exported default for everything else.
+        listArgIndex: (ifcType: string) =>
+          ifcType === "IFCRELDEFINESBYPROPERTIES"
+            ? undefined
+            : listIdxByType(ifcType),
+      },
+    ].map(async (config) => {
+      const io = new MemoryIO(source);
+      await new IfcSplitter(io, config).split("in.ifc", 1, () => "out.ifc");
+      return linesOf(io.sinks.get("out.ifc"));
+    }),
+  );
+
+  expect(byDefault).toEqual([
+    "#1=IFCWALL",
+    "#2=IFCPROPERTYSET",
+    "#3=IFCPROPERTYSINGLEVALUE",
+    "#4=IFCRELDEFINESBYPROPERTIES",
+  ]);
+  expect(
+    skipped,
+    "Dropping the relation drops everything it pulled in",
+  ).toEqual(["#1=IFCWALL"]);
+});
+
 test("split releases every output writer when the write pass fails", async () => {
   const io = new MemoryIO(syntheticIfcWithWalls(2), 2);
   const splitter = new IfcSplitter(io);
@@ -121,6 +263,41 @@ test("extract releases the output writer when the write pass fails", async () =>
 
   expect(io.sinks.get("out.ifc")?.aborted).toBe(true);
   expect(io.sinks.get("out.ifc")?.closed).toBe(false);
+});
+
+// Regression: `collectDeps` marked an id visited BEFORE looking up its refs, so
+// an id that is only ever referenced — never defined by a line of its own — was
+// reported in the group's id set. It cannot be, since nothing is written for it.
+test("split never reports an id the source does not define", async () => {
+  const source = [
+    "ISO-10303-21;",
+    "HEADER;",
+    "ENDSEC;",
+    "DATA;",
+    // Dangling reference: no line defines #999.
+    "#1=IFCWALL('guid1',$,$,$,$,#999,$,$);",
+    // '#' inside a quoted string, which the ref scanner reads as a reference.
+    "#2=IFCWALL('guid2 (see #99999)',$,$,$,$,$,$,$);",
+    "ENDSEC;",
+    "END-ISO-10303-21;",
+  ].join("\n");
+  const defined = new Set(
+    [...source.matchAll(/^#(\d+)=/gm)].map((m) => Number(m[1])),
+  );
+  const io = new MemoryIO(source);
+  const splitter = new IfcSplitter(io);
+
+  const splitMap = await splitter.split(
+    "in.ifc",
+    2,
+    (groupId) => `out_${groupId}.ifc`,
+  );
+
+  expect(splitMap.size).toBe(2);
+  for (const [groupId, { ids }] of splitMap) {
+    const undefined_ = [...ids].filter((id) => !defined.has(id));
+    expect(undefined_, `group ${groupId} reports undefined ids`).toEqual([]);
+  }
 });
 
 // Regression: group membership used to live in a `1 << g` bitmask over a
@@ -323,12 +500,55 @@ test("split ifc", async () => {
       ids: fileIds,
     });
   }
+}, 60_000);
+
+// Regression: extract used to resolve dependencies (including resolveStyles)
+// before rewriting relationship lines. Entities pulled into the output only by
+// the relations pass therefore never got their presentation styles resolved:
+// their IfcStyledItem bindings — and the style chain behind them (surface
+// style, rendering, colour) — were silently dropped. Nothing references a
+// styled item, so the output has no dangling refs and no warning fires; the
+// geometry just loses its render style. The relations pass must run before
+// dependency resolution so resolveStyles covers relation-discovered geometry.
+test("extract keeps the styled items of every included geometry item", async () => {
+  const splitter = new IfcSplitterNode();
+  const inputPath = path.resolve(assetDir, "resources/ifc/school_str.ifc");
+  const outputPath = path.resolve(__dirname, ".tmp", "styled.ifc");
+
+  const extractedIds = await splitter.extract(inputPath, [501], outputPath);
+
+  const source = await readFile(inputPath, "utf8");
+
+  // Every styled item in the source whose target geometry was extracted must
+  // be extracted too, along with the styles it binds.
+  const missingStyledItems: number[] = [];
+  const missingStyles: number[] = [];
+  for (const m of source.matchAll(/^#(\d+)\s*=\s*IFCSTYLEDITEM\((.*)$/gm)) {
+    const styledItemId = Number(m[1]);
+    const [target, ...styleRefs] = [...m[2].matchAll(/#(\d+)/g)].map((r) =>
+      Number(r[1]),
+    );
+    if (!extractedIds.has(target)) continue;
+    if (!extractedIds.has(styledItemId)) {
+      missingStyledItems.push(styledItemId);
+      continue;
+    }
+    for (const styleId of styleRefs) {
+      if (!extractedIds.has(styleId)) missingStyles.push(styleId);
+    }
+  }
+
+  expect(missingStyledItems, "styled items of included geometry").toHaveLength(
+    0,
+  );
+  expect(missingStyles, "styles bound by included styled items").toHaveLength(
+    0,
+  );
 });
 
 test("extract ifc", async () => {
   const splitter = new IfcSplitterNode();
   const inputPath = path.resolve(assetDir, "resources/ifc/school_str.ifc");
-  const inputFrag = path.resolve(assetDir, "resources/frags/school_str.frag");
   const outputPath = path.resolve(__dirname, ".tmp", "extracted.ifc");
   const onProgress = vi.fn<(event: IfcSplitterProgressEvent) => unknown>();
   const onSplitsResolved = vi.fn<(event: IfcSplitterGroupsEvent) => unknown>();
@@ -369,6 +589,10 @@ test("extract ifc", async () => {
   importer.addAllRelations();
   importer.wasm = { path: webIfcDir + path.sep, absolute: true };
   importer.webIfcSettings.COORDINATE_TO_ORIGIN = false;
+  const fixtureFrag = await importer.process({
+    bytes: await readFile(inputPath),
+  });
+  const fixtureModel = new SingleThreadedFragmentsModel("fixture", fixtureFrag);
   const extractedFrag = await importer.process({
     bytes: await readFile(outputPath),
   });
@@ -376,16 +600,15 @@ test("extract ifc", async () => {
     "extracted",
     extractedFrag,
   );
-  const fixtureModel = new SingleThreadedFragmentsModel(
-    "fixture",
-    await readFile(inputFrag),
-  );
+  // Absolute sampleId/representationId values depend on the importer's
+  // dedup internals (the #238 hash change shifted them all), so pin the
+  // shape only; the cross-model comparisons below carry the equivalence.
   expect(extractedModel.getItemsGeometry(idsToExtract)).toEqual([
     [
       expect.objectContaining({
         localId: 501,
-        sampleId: 96583,
-        representationId: 96580,
+        sampleId: expect.any(Number),
+        representationId: expect.any(Number),
       }),
     ],
   ]);
@@ -393,8 +616,8 @@ test("extract ifc", async () => {
     [
       expect.objectContaining({
         localId: 501,
-        sampleId: 99301,
-        representationId: 98690,
+        sampleId: expect.any(Number),
+        representationId: expect.any(Number),
       }),
     ],
   ]);
@@ -446,4 +669,4 @@ test("extract ifc", async () => {
   comparisons.map(({ message, actual, expected }) =>
     expect.soft(actual, message).toEqual(expected),
   );
-});
+}, 60_000);

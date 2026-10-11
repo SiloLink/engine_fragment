@@ -61,6 +61,7 @@ function createProtocolHarness() {
       threads: connection,
       tiles: new Map([[1, mesh]]),
       _finishProcessing: vi.fn(),
+      _failProcessing: vi.fn(),
     } as unknown as FragmentsModel;
     meshes.list.set(modelId, model);
 
@@ -80,6 +81,9 @@ function createProtocolHarness() {
     Object.assign(controller, {
       _modelId: modelId,
       _sampleAmount: sampleAmount,
+      _boxes: { lookup: null },
+      _outsideMask: new Uint8Array(sampleAmount),
+      _rewindArmed: true,
       _currentSample: 0,
       _changedSamples: 0,
       _samplesDimensions: Int32Array.from(
@@ -284,6 +288,7 @@ describe("view completion across the worker protocol", () => {
     await protocol.flushWorkerMessages();
     expect(processedSamples).toHaveLength(64);
 
+    view.currentCamera!.position.x += 1;
     await view.refreshView(model, protocol.meshes);
     const replacementRevision = workerModel.view.renderRevision;
     expect(replacementRevision).toBeGreaterThan(firstRevision);
@@ -352,6 +357,8 @@ describe("view completion across the worker protocol", () => {
       },
     ]);
     expect(broken.model._finishProcessing).not.toHaveBeenCalled();
+    expect(broken.model._failProcessing).toHaveBeenCalledOnce();
+    expect(healthy.model._failProcessing).not.toHaveBeenCalled();
     expect(healthy.model._finishProcessing).toHaveBeenCalledOnce();
     expect(logged).toHaveBeenCalledExactlyOnceWith(failure);
 
@@ -361,7 +368,7 @@ describe("view completion across the worker protocol", () => {
     expect(protocol.finishes()).toHaveLength(2);
 
     (broken.controller as any).updateMesh = sampleUpdate;
-    await broken.view.refreshView(broken.model, protocol.meshes);
+    await broken.view.refreshView(broken.model, protocol.meshes, true);
     const recovered = protocol.meshes.forceUpdateFinish();
     expect(protocol.tickUpdater()).toBe(true);
     await protocol.flushWorkerMessages();

@@ -8,6 +8,10 @@ export class HighlightHelper {
     "opacity",
     "transparent",
     "renderedFaces",
+    "depthTest",
+    "depthWrite",
+    "polygonOffsetFactor",
+    "polygonOffsetUnits",
   ];
 
   resetHighlight(model: VirtualFragmentsModel, items?: number[]): void {
@@ -18,13 +22,25 @@ export class HighlightHelper {
     // instead of itemIds, which silently misses entries whose
     // localIdIndex doesn't coincide with their itemId — which happens on
     // any model where the sample order isn't the same as the item order.
+    // Highlight ids index a material list that only ever grew, so a long
+    // session could exhaust the 16-bit id space (#299). Once nothing is
+    // highlighted no item references a highlight id, and all of them can
+    // be handed back. A full reset needs no check; a partial one scans the
+    // items (early exit on the first highlight), about 4 to 6 ns per item
+    // when nothing is left highlighted. The scan is kept off the per-sample
+    // paths on purpose: counting highlights in setHighlight instead measured
+    // +1.3 to 4.5 ns on every call, and the tile pass calls it per sample.
+    let nothingHighlighted = true;
     if (!items) {
       model.itemConfig.clearHighlight();
-      model.tiles.restart();
-      return;
+    } else {
+      const itemIds = model.properties.getItemIdsFromLocalIds(items);
+      this.resetHighlightForItems(itemIds, model);
+      nothingHighlighted = !model.itemConfig.hasAnyHighlight();
     }
-    const itemIds = model.properties.getItemIdsFromLocalIds(items);
-    this.resetHighlightForItems(itemIds, model);
+    if (nothingHighlighted) {
+      model.materials.reclaimHighlights();
+    }
     model.tiles.restart();
   }
 
@@ -122,13 +138,13 @@ export class HighlightHelper {
         color.r,
         color.g,
         color.b,
-        THREE.SRGBColorSpace
+        THREE.SRGBColorSpace,
       );
     }
     const material = {
       color: normalizedColor,
       preserveOriginalMaterial: true,
-      _explicitProps: ['color'],
+      _explicitProps: ["color"],
     } as MaterialDefinition;
     this.highlight(model, items, material);
   }
@@ -140,16 +156,12 @@ export class HighlightHelper {
     });
   }
 
-  setOpacity(
-    model: VirtualFragmentsModel,
-    items: number[],
-    opacity: number,
-  ) {
+  setOpacity(model: VirtualFragmentsModel, items: number[], opacity: number) {
     const material = {
       opacity,
       transparent: opacity < 1,
       preserveOriginalMaterial: true,
-      _explicitProps: ['opacity', 'transparent'],
+      _explicitProps: ["opacity", "transparent"],
     } as MaterialDefinition;
     this.highlight(model, items, material);
   }
@@ -195,7 +207,8 @@ export class HighlightHelper {
     const newHigh = { ...highlightMaterial } as MaterialDefinition;
 
     const pastExplicit: string[] = (pastHigh as any)._explicitProps || [];
-    const newExplicit: string[] = (highlightMaterial as any)._explicitProps || [];
+    const newExplicit: string[] =
+      (highlightMaterial as any)._explicitProps || [];
 
     if (pastExplicit.length > 0 || newExplicit.length > 0) {
       for (const prop of pastExplicit) {
@@ -204,10 +217,16 @@ export class HighlightHelper {
           (newHigh as any)[prop] = pastHigh[key];
         }
       }
-      (newHigh as any)._explicitProps = [...new Set([...pastExplicit, ...newExplicit])];
+      (newHigh as any)._explicitProps = [
+        ...new Set([...pastExplicit, ...newExplicit]),
+      ];
     } else {
       for (const prop of this._highlightProps) {
-        this.setHighlightProperty(newHigh, pastHigh, prop as keyof MaterialDefinition);
+        this.setHighlightProperty(
+          newHigh,
+          pastHigh,
+          prop as keyof MaterialDefinition,
+        );
       }
     }
 

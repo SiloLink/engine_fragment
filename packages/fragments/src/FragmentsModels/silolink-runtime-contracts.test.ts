@@ -12,6 +12,7 @@ import { VirtualTilesController } from "./src/virtual-model/virtual-controllers/
 
 describe("SiloLink Fragments runtime contracts", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -31,19 +32,21 @@ describe("SiloLink Fragments runtime contracts", () => {
   });
 
   it("rate-limits ordinary refreshes without skipping a forced fence", async () => {
+    vi.useFakeTimers();
     const refreshView = vi.fn(async () => undefined);
     const updateMeshes = vi.fn();
     const forceUpdateFinish = vi.fn(async () => undefined);
-    const fragments = {
+    const fragments = Object.assign(Object.create(FragmentsModels.prototype), {
       _isDisposed: false,
       _lastUpdate: performance.now(),
+      scheduleNextUpdate: vi.fn(),
       settings: { maxUpdateRate: 10_000 },
       models: {
         list: new Map([["model", { _refreshView: refreshView }]]),
         update: updateMeshes,
         forceUpdateFinish,
       },
-    };
+    });
 
     await FragmentsModels.prototype.update.call(
       fragments as unknown as FragmentsModels,
@@ -51,13 +54,38 @@ describe("SiloLink Fragments runtime contracts", () => {
     );
     expect(refreshView).not.toHaveBeenCalled();
 
-    await FragmentsModels.prototype.update.call(
+    const pending = FragmentsModels.prototype.update.call(
       fragments as unknown as FragmentsModels,
       true,
     );
+    const coalesced = fragments.update(true);
+    await vi.advanceTimersByTimeAsync(10_001);
+    await Promise.all([pending, coalesced]);
     expect(refreshView).toHaveBeenCalledOnce();
     expect(forceUpdateFinish).toHaveBeenCalledOnce();
     expect(updateMeshes).not.toHaveBeenCalled();
+    clearTimeout(fragments._autoRedrawInterval);
+  });
+
+  it("propagates a coalesced forced update failure to every caller", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("view failed");
+    const fragments = Object.assign(Object.create(FragmentsModels.prototype), {
+      _isDisposed: false,
+      _lastUpdate: performance.now(),
+      settings: { maxUpdateRate: 100 },
+      models: {
+        list: new Map([
+          ["model", { _refreshView: vi.fn().mockRejectedValue(failure) }],
+        ]),
+        forceUpdateFinish: vi.fn(),
+      },
+    });
+    const first = expect(fragments.update(true)).rejects.toBe(failure);
+    const second = expect(fragments.update(true)).rejects.toBe(failure);
+    await vi.advanceTimersByTimeAsync(101);
+    await Promise.all([first, second]);
+    expect(fragments.models.forceUpdateFinish).not.toHaveBeenCalled();
   });
 
   it("binds screen-space LOD to the owning viewport size", () => {

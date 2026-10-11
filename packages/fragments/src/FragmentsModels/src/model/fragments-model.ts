@@ -176,6 +176,11 @@ export class FragmentsModel implements IFragmentsModel<true> {
   /**
    * The event that is triggered when the clipping planes are needed in the thread.
    * Set this method to pass your Three.js clipping planes to the model.
+   *
+   * @deprecated Pass the planes with the `clippingPlanes` option of
+   * {@link FragmentsModels.load}, or call {@link useClippingPlanes} after
+   * loading. This callback keeps working; whichever of the two was set last
+   * is the one the model uses.
    */
   get getClippingPlanesEvent() {
     return this._viewManager.getClippingPlanesEvent;
@@ -184,9 +189,23 @@ export class FragmentsModel implements IFragmentsModel<true> {
   /**
    * The event that is triggered when the clipping planes are needed in the thread.
    * Set this method to pass your Three.js clipping planes to the model.
+   *
+   * @deprecated Pass the planes with the `clippingPlanes` option of
+   * {@link FragmentsModels.load}, or call {@link useClippingPlanes} after
+   * loading. This callback keeps working; whichever of the two was set last
+   * is the one the model uses.
    */
   set getClippingPlanesEvent(value: () => THREE.Plane[]) {
     this._viewManager.getClippingPlanesEvent = value;
+  }
+
+  /**
+   * The clipping planes the model culls against, in world space. This is the
+   * array passed to {@link useClippingPlanes} (or the `clippingPlanes` load
+   * option) itself, not a copy.
+   */
+  get clippingPlanes(): THREE.Plane[] {
+    return this._viewManager.getClippingPlanesEvent();
   }
 
   get camera() {
@@ -805,6 +824,19 @@ export class FragmentsModel implements IFragmentsModel<true> {
   }
 
   /**
+   * Sets the clipping planes the model culls against, in world space. Pass
+   * the same array your renderer clips with (e.g. `renderer.clippingPlanes`):
+   * the model keeps the reference and reads it on every view refresh, so
+   * adding, removing or moving planes in place is picked up without calling
+   * this again. Assigning a new array to `renderer.clippingPlanes` is not:
+   * call this again with the new array.
+   * @param planes - The clipping planes to use.
+   */
+  useClippingPlanes(planes: THREE.Plane[]) {
+    this._viewManager.getClippingPlanesEvent = () => planes;
+  }
+
+  /**
    * Sets the LOD / culling mode of the model.
    * @param lodMode - The LOD / culling mode to set.
    */
@@ -1163,10 +1195,19 @@ export class FragmentsModel implements IFragmentsModel<true> {
   /**
    * Internal method to refresh the view of the model. You shouldn't call this directly. Instead, use {@link FragmentsModels.update}.
    */
-  async _refreshView() {
+  async _refreshView(force = false) {
     if (this.frozen) return;
-    this._isProcessing = true;
-    const mainPromise = this._viewManager.refreshView(this, this._meshManager);
+    // Only mark the model busy when a REFRESH_VIEW was actually
+    // dispatched — a skipped (unchanged-view) refresh produces no
+    // FINISH, so setting the flag would leave `isBusy` stuck. The
+    // flag flips before the worker can emit the resulting FINISH
+    // (mesh batches flush at least one macrotask later), so there is
+    // no window where the FINISH could be consumed first.
+    const mainPromise = this._viewManager
+      .refreshView(this, this._meshManager, force)
+      .then((sent) => {
+        if (sent) this._isProcessing = true;
+      });
     const deltaPromise = this._editor._update(this.modelId);
     await Promise.all([mainPromise, deltaPromise]);
   }

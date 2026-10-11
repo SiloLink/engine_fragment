@@ -14,7 +14,9 @@ export class ThreadViewRefresher extends ThreadController {
       const { view } = input;
       model.refreshView({
         ...view,
-        cameraFrustum: MultithreadingHelper.frustum(view.cameraFrustum),
+        cameraFrustum: view.cameraFrustum
+          ? MultithreadingHelper.frustum(view.cameraFrustum)
+          : null,
         cameraPosition: MultithreadingHelper.array(view.cameraPosition),
         clippingPlanes: MultithreadingHelper.planeSet(view.clippingPlanes),
         modelPlacement: MultithreadingHelper.transform(view.modelPlacement),

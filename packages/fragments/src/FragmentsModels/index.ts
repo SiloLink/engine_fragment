@@ -9,12 +9,11 @@ import {
 } from "./src";
 import { FragmentsConnection } from "./src/multithreading/fragments-connection";
 import { ThreadHandler } from "./src/multithreading/connection-handlers";
-import { Event } from "../Utils";
+import { Event, FRAGMENTS_VERSION } from "../Utils";
 import { Editor } from "./src/edit";
+import { getBundledWorkerUrl } from "../bundled-worker-url";
 
 export * from "./src";
-
-declare const __FRAGMENTS_VERSION__: string;
 
 export interface FragmentsModelsOptions {
   /**
@@ -61,7 +60,7 @@ export class FragmentsModels {
     if (FragmentsModels._workerPromise) return FragmentsModels._workerPromise;
 
     FragmentsModels._workerPromise = (async () => {
-      const url = `https://unpkg.com/@thatopen/fragments@${__FRAGMENTS_VERSION__}/dist/worker/worker.mjs`;
+      const url = `https://unpkg.com/@thatopen/fragments@${FRAGMENTS_VERSION}/dist/Worker/worker.mjs`;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(
@@ -171,6 +170,11 @@ export class FragmentsModels {
   private _isDisposed = false;
   private _autoRedrawInterval: any = null;
   private _lastUpdate = 0;
+  private _pendingForcedUpdate: Promise<void> | null = null;
+  // Handle and resolver of the coalesced forced update, kept so dispose()
+  // can cancel the timer and still release whoever is awaiting it.
+  private _pendingForcedTimer: ReturnType<typeof setTimeout> | null = null;
+  private _pendingForcedResolve: (() => void) | null = null;
 
   /**
    * Creates a new FragmentsModels instance.
@@ -182,8 +186,7 @@ export class FragmentsModels {
    * @param options - Optional configuration.
    */
   constructor(workerURL?: string, options?: FragmentsModelsOptions) {
-    const url =
-      workerURL ?? new URL("./Worker/worker.mjs", import.meta.url).href;
+    const url = workerURL ?? getBundledWorkerUrl();
     const requestEvent = this.newRequestEvent();
     const updateEvent = this.newUpdateEvent();
     this._connection = new FragmentsConnection(requestEvent, url, {
@@ -223,6 +226,7 @@ export class FragmentsModels {
    * @param options.modelId - Unique identifier for the model.
    * @param options.camera - Optional camera to use for model culling and LOD.
    * @param options.viewSize - Optional screen-space size in pixels that LOD uses with `camera`. See {@link FragmentsModel.useCamera}.
+   * @param options.clippingPlanes - Optional clipping planes (world space) to cull against. The array is kept by reference and read on every view refresh; see {@link FragmentsModel.useClippingPlanes}.
    * @param options.raw - Whether the buffer is raw (uncompressed) or deflated. If omitted, it is auto-detected from the buffer (see {@link isRawBuffer}).
    * @param options.userData - Optional custom data to attach to the model.
    * @param options.virtualModelConfig - Optional configuration for virtual model setup.
@@ -241,6 +245,7 @@ export class FragmentsModels {
        * {@link FragmentsModel.useCamera}. Ignored without `camera`.
        */
       viewSize?: number;
+      clippingPlanes?: THREE.Plane[];
       raw?: boolean;
       userData?: Record<string, any>;
       virtualModelConfig?: VirtualModelConfig;
@@ -295,6 +300,7 @@ export class FragmentsModels {
     if (options.camera) {
       model.useCamera(options.camera, options.viewSize);
     }
+    if (options.clippingPlanes) model.useClippingPlanes(options.clippingPlanes);
 
     model.graphicsQuality = this.settings.graphicsQuality;
 
@@ -359,6 +365,19 @@ export class FragmentsModels {
    */
   async dispose() {
     this._isDisposed = true;
+    if (this._autoRedrawInterval) {
+      clearTimeout(this._autoRedrawInterval);
+      this._autoRedrawInterval = null;
+    }
+    if (this._pendingForcedTimer) {
+      clearTimeout(this._pendingForcedTimer);
+      this._pendingForcedTimer = null;
+    }
+    if (this._pendingForcedResolve) {
+      this._pendingForcedResolve();
+      this._pendingForcedResolve = null;
+    }
+    this._pendingForcedUpdate = null;
     const models = Array.from(this.models.list.values());
     const promises = [];
     for (const model of models) {
@@ -407,15 +426,55 @@ export class FragmentsModels {
       return;
     }
     const now = performance.now();
-    if (!force && now - this._lastUpdate < this.settings.maxUpdateRate) {
+    const elapsed = now - this._lastUpdate;
+    if (elapsed < this.settings.maxUpdateRate) {
+      if (!force) {
+        // Keep the poll alive: view changes are detected by these
+        // periodic checks, so a throttled call must still leave a
+        // scheduled one behind. Cheap — no worker traffic happens
+        // until a view actually changes.
+        this.scheduleNextUpdate();
+        return;
+      }
+      // Forced updates must not be dropped (callers await them as a
+      // fence), but they must not bypass the rate limit either: camera
+      // controls emit "rest" — and the components layer forces an
+      // update on it — on nearly every frame of a programmatic orbit,
+      // and each forced refresh is a full re-cull plus an unbounded
+      // drain on the main thread. Coalesce every forced call inside
+      // the window into one trailing forced update; awaiting callers
+      // are released when that one has settled, which covers all the
+      // RPCs they could have been waiting for.
+      if (!this._pendingForcedUpdate) {
+        const delay = this.settings.maxUpdateRate - elapsed + 1;
+        this._pendingForcedUpdate = new Promise<void>((resolve, reject) => {
+          this._pendingForcedResolve = resolve;
+          this._pendingForcedTimer = setTimeout(() => {
+            this._pendingForcedTimer = null;
+            this._pendingForcedResolve = null;
+            this._pendingForcedUpdate = null;
+            this.performUpdate(true).then(resolve, reject);
+          }, delay);
+        });
+      }
+      return this._pendingForcedUpdate;
+    }
+    return this.performUpdate(force);
+  }
+
+  private async performUpdate(force: boolean) {
+    if (this._isDisposed) {
       return;
     }
-    this._lastUpdate = now;
+    this._lastUpdate = performance.now();
 
-    // Update the virtual view for all models
+    // Update the virtual view for all models. Unforced refreshes are
+    // skipped per model when its view is unchanged (no RPC at all);
+    // forced ones always dispatch because their FINISH acts as the
+    // completion fence for forceUpdateFinish below.
     const modelUpdates: Promise<void>[] = [];
     for (const model of this.models.list.values()) {
-      modelUpdates.push(model._refreshView());
+      modelUpdates.push(model._refreshView(force));
     }
     await Promise.all(modelUpdates);
 
@@ -425,6 +484,28 @@ export class FragmentsModels {
     } else {
       this.models.update();
     }
+    this.scheduleNextUpdate();
+  }
+
+  /**
+   * (Re)schedules the next automatic update. The view-change gating
+   * means an idle scene produces no worker messages and thus no
+   * FINISH-driven update events, so the loop sustains itself with
+   * this timer instead. Skipped when disposed or no models exist —
+   * the next model load (or any mesh update event) restarts it.
+   */
+  private scheduleNextUpdate() {
+    if (this._isDisposed || this.models.list.size === 0) {
+      return;
+    }
+    if (this._autoRedrawInterval) {
+      clearTimeout(this._autoRedrawInterval);
+    }
+    const offset = this.settings.maxUpdateRate + 1;
+    this._autoRedrawInterval = setTimeout(() => {
+      this._autoRedrawInterval = null;
+      this.update();
+    }, offset);
   }
 
   private async manageRequest(message: any): Promise<void> {
@@ -447,6 +528,8 @@ export class FragmentsModels {
 
   private newUpdateEvent() {
     return () => {
+      // A tile batch can land after dispose(); it must not re-arm the loop.
+      if (this._isDisposed) return;
       // This limits the maximum update rate to the maxUpdateRate setting
       if (this._autoRedrawInterval) {
         clearTimeout(this._autoRedrawInterval);
@@ -454,6 +537,7 @@ export class FragmentsModels {
 
       const offset = this.settings.maxUpdateRate + 1;
       this._autoRedrawInterval = setTimeout(() => {
+        this._autoRedrawInterval = null;
         this.update();
       }, offset);
     };
