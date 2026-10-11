@@ -343,6 +343,10 @@ export class MeshManager {
       return false;
     }
 
+    // Keep the full index immutable. Only tiles using compaction need a
+    // writable copy. Reuse it for the tile's lifetime, including across
+    // highlight/group updates, to avoid allocating on every transition.
+    if (index.array === full) index.array = full.slice();
     const target = index.array as Uint16Array | Uint32Array;
     const { position, size } = visibilityData!;
     let count = 0;
@@ -405,12 +409,11 @@ export class MeshManager {
     }
     // Unlike positions/normals, the index array is kept on the CPU: it is
     // the source for compacting the visible ranges of a tile into a
-    // single draw call (see applyCompactIndex). The GPU-side attribute is
-    // a same-sized copy whose content is rewritten in place, so the GL
-    // buffer never has to be reallocated.
+    // single draw call (see applyCompactIndex). The attribute shares this
+    // array until compaction needs a writable copy of the same type and
+    // length, so the GL buffer never has to be reallocated.
     const full = indices as Uint16Array | Uint32Array;
-    const gpu = full.slice();
-    geometry.setIndex(new THREE.BufferAttribute(gpu, 1));
+    geometry.setIndex(new THREE.BufferAttribute(full, 1));
     geometry.userData.fullIndex = full;
     geometry.userData.compactIndex = false;
   }
