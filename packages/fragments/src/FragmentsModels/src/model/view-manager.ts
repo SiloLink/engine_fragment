@@ -104,7 +104,7 @@ export class ViewManager {
     this.setCameraPosition(camera);
     this.setCameraFrustum(camera, projScreenMatrix);
     this.setFov(camera);
-    this.setOrtho();
+    this.setOrtho(camera);
     this.currentCamera = camera;
   }
 
@@ -238,9 +238,18 @@ export class ViewManager {
     };
   }
 
-  private setOrtho() {
-    // TODO: return ortho size in meters of biggest camera dimension (width or height)
+  private setOrtho(camera: THREE.PerspectiveCamera | THREE.OrthographicCamera) {
     this._updateOrthoSizeEvent = () => {
+      if (camera instanceof THREE.OrthographicCamera) {
+        // The projection is refreshed before reading the view dimensions. Its
+        // scale includes zoom and view offsets; use the largest span to match
+        // the largest viewport dimension sent to the worker.
+        const projection = camera.projectionMatrix.elements;
+        return Math.max(
+          2 / Math.abs(projection[0]),
+          2 / Math.abs(projection[5]),
+        );
+      }
       return undefined;
     };
   }
