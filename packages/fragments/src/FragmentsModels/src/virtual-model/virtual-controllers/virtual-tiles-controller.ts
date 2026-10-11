@@ -1086,8 +1086,14 @@ export class VirtualTilesController {
     this._samples.setHighlight(id, high);
     const tileIds = this.getTileIds(id, lod);
     if (tileIds === undefined) return;
+    // A tile draws its visible samples with its own material and its
+    // highlighted ones with their highlight's, over the same index ranges.
+    // A shown sample is in exactly one of the two: drawn with both, the
+    // opaque tile material would hide a translucent highlight. A hidden one
+    // is in neither.
+    const highlight = vis ? high : 0;
     MiscHelper.forEach(tileIds, (tileId) => {
-      this.updateTile(tileId, id, high, vis);
+      this.updateTile(tileId, id, highlight, vis && highlight === 0);
     });
   }
 

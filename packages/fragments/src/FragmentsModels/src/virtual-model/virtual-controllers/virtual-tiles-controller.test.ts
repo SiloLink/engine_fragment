@@ -79,6 +79,18 @@ const tileVisibilityFor = (model: VirtualFragmentsModel, sampleId: number) => {
   return undefined;
 };
 
+/** The highlight the tile draws `sampleId` with; 0 when none. */
+const tileHighlightFor = (model: VirtualFragmentsModel, sampleId: number) => {
+  const tiles = (model.tiles as any)._tiles as Map<number, any>;
+  for (const tile of tiles.values()) {
+    const location = tile.sampleSpans.get(sampleId)?.start;
+    if (location !== undefined) {
+      return (tile.highlights as any).getBufferData(location).data as number;
+    }
+  }
+  return undefined;
+};
+
 const loadStabilized = async () => {
   const connection: any = { fetch: async () => {}, fetchMeshCompute: () => {} };
   const inflated = Pako.inflate(readFileSync(FRAG));
@@ -156,6 +168,81 @@ describe(
           CurrentLod.GEOMETRY,
         );
         expect(tileVisibilityFor(model, 0)).toBe(false);
+      } finally {
+        model.dispose();
+      }
+    });
+  },
+);
+
+// A tile draws its visible samples with the tile material and its highlighted
+// samples with their highlight materials, both over the same index ranges. A
+// sample in both is drawn twice, and the opaque tile material then hides a
+// translucent highlight.
+describe(
+  "VirtualTilesController.setSample highlight drawing",
+  { timeout: 30000 },
+  () => {
+    const translucentHighlight = (model: VirtualFragmentsModel) => {
+      const [highlight] = (model.tiles as any)._materialController.transfer([
+        { opacity: 0.03, transparent: true },
+      ]);
+      return highlight as number;
+    };
+
+    test("a shown highlighted sample draws only through its highlight", async () => {
+      const model = await loadStabilized();
+      try {
+        const highlight = translucentHighlight(model);
+        (model.tiles as any).setSample(0, true, highlight, CurrentLod.GEOMETRY);
+
+        expect(tileVisibilityFor(model, 0)).toBe(false);
+        expect(tileHighlightFor(model, 0)).toBe(highlight);
+      } finally {
+        model.dispose();
+      }
+    });
+
+    test("a hidden highlighted sample draws through neither material", async () => {
+      const model = await loadStabilized();
+      try {
+        const highlight = translucentHighlight(model);
+        (model.tiles as any).setSample(
+          0,
+          false,
+          highlight,
+          CurrentLod.GEOMETRY,
+        );
+
+        expect(tileVisibilityFor(model, 0)).toBe(false);
+        expect(tileHighlightFor(model, 0)).toBe(0);
+      } finally {
+        model.dispose();
+      }
+    });
+
+    test("an object faded while hidden shows only translucent", async () => {
+      const model = await loadStabilized();
+      try {
+        const itemId = (model.tiles as any).itemId(0);
+        const [localId] = model.properties.getLocalIdsFromItemIds([itemId]);
+        model.setVisible([localId], false);
+        expect(tileVisibilityFor(model, 0)).toBe(false);
+
+        model.setOpacity([localId], 0.03);
+        model.setVisible([localId], true);
+        for (let i = 0; i < 50; i++) model.update(performance.now());
+
+        expect(tileVisibilityFor(model, 0)).toBe(false);
+        expect(tileHighlightFor(model, 0)).not.toBe(0);
+
+        model.resetOpacity([localId]);
+        for (let i = 0; i < 50; i++) model.update(performance.now());
+        // The emptied highlight is opaque again, still drawn once.
+        expect(
+          Number(tileVisibilityFor(model, 0)) +
+            Number(tileHighlightFor(model, 0) !== 0),
+        ).toBe(1);
       } finally {
         model.dispose();
       }

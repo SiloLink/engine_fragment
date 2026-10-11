@@ -32448,8 +32448,9 @@ class VirtualTilesController {
     this._samples.setHighlight(id, high);
     const tileIds = this.getTileIds(id, lod);
     if (tileIds === void 0) return;
+    const highlight = vis ? high : 0;
     MiscHelper.forEach(tileIds, (tileId) => {
-      this.updateTile(tileId, id, high, vis);
+      this.updateTile(tileId, id, highlight, vis && highlight === 0);
     });
   }
   getTileIds(sample, lod) {
