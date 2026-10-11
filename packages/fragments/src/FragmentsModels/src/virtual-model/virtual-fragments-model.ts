@@ -96,7 +96,7 @@ export class VirtualFragmentsModel {
 
   constructor(
     modelId: string,
-    data: ArrayBuffer,
+    data: ArrayBuffer | Uint8Array,
     connection: Connection,
     config?: VirtualModelConfig,
   ) {
@@ -894,8 +894,14 @@ export class VirtualFragmentsModel {
     });
   }
 
-  private setupModel(data: ArrayBuffer) {
-    const uintArray = new Uint8Array(data);
+  private setupModel(data: ArrayBuffer | Uint8Array) {
+    // Worker input and decompressed bytes belong to this model. Keep their
+    // view instead of copying the entire FlatBuffer. Generated vector readers
+    // require aligned storage, so normalize an unaligned view when necessary.
+    const uintArray =
+      data instanceof Uint8Array && data.byteOffset % 8 === 0
+        ? data
+        : new Uint8Array(data);
     const byteBuffer = new ByteBuffer(uintArray);
     return Model.getRootAsModel(byteBuffer);
   }

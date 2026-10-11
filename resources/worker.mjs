@@ -39390,7 +39390,7 @@ class VirtualFragmentsModel {
     });
   }
   setupModel(data) {
-    const uintArray = new Uint8Array(data);
+    const uintArray = data instanceof Uint8Array && data.byteOffset % 8 === 0 ? data : new Uint8Array(data);
     const byteBuffer = new ByteBuffer(uintArray);
     return Model.getRootAsModel(byteBuffer);
   }

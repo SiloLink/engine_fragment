@@ -60,14 +60,13 @@ export class SingleThreadedFragmentsModel implements IFragmentsModel<false> {
     this._modelId = modelId;
 
     const isRaw = raw ?? isRawBuffer(modelData);
-    let data = modelData;
-    if (!isRaw) {
-      data = pako.inflate(modelData);
-    }
+    // Raw input remains caller-owned. Decompression already creates storage
+    // owned by this model, so only raw input needs an isolation copy.
+    const data = isRaw ? new Uint8Array(modelData) : pako.inflate(modelData);
 
     this._virtualModel = new VirtualFragmentsModel(
       modelId,
-      data as any,
+      data,
       undefined as any,
     );
 
