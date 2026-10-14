@@ -17,9 +17,16 @@ export class MaterialUtils {
     }
 
     for (const property of _explicitProps ?? []) {
+      if (property === "opacityScale") continue;
       if ((definition as any)[property] !== undefined) {
         (combined as any)[property] = (definition as any)[property];
       }
+    }
+    // A relative opacity scales whatever opacity this original material has.
+    const scale = definition.opacityScale;
+    if (scale !== undefined) {
+      combined.opacity = (original.opacity ?? 1) * scale;
+      combined.transparent = original.transparent || combined.opacity < 1;
     }
     return combined;
   }

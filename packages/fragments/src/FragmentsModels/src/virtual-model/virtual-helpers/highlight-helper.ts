@@ -156,19 +156,42 @@ export class HighlightHelper {
     });
   }
 
-  setOpacity(model: VirtualFragmentsModel, items: number[], opacity: number) {
-    const material = {
-      opacity,
-      transparent: opacity < 1,
-      preserveOriginalMaterial: true,
-      _explicitProps: ["opacity", "transparent"],
-    } as MaterialDefinition;
+  /**
+   * An absolute opacity replaces each original material's opacity; a relative
+   * one scales it. Each names the other's properties too, so the latest call
+   * replaces an earlier opacity of either kind while color highlights stay.
+   */
+  setOpacity(
+    model: VirtualFragmentsModel,
+    items: number[],
+    opacity: number,
+    relative = false,
+  ) {
+    const material = (
+      relative
+        ? {
+            opacityScale: opacity,
+            preserveOriginalMaterial: true,
+            _explicitProps: ["opacityScale", "opacity", "transparent"],
+          }
+        : {
+            opacity,
+            transparent: opacity < 1,
+            preserveOriginalMaterial: true,
+            _explicitProps: ["opacity", "transparent", "opacityScale"],
+          }
+    ) as MaterialDefinition;
     this.highlight(model, items, material);
   }
 
   resetOpacity(model: VirtualFragmentsModel, items: number[]) {
     this.updateHighlightDefinition(model, items, (current) => {
-      const { opacity: _o, transparent: _t, ...rest } = current;
+      const {
+        opacity: _o,
+        transparent: _t,
+        opacityScale: _s,
+        ...rest
+      } = current;
       return rest;
     });
   }

@@ -111,6 +111,12 @@ export type MaterialDefinition = {
   /** Whether the material is transparent */
   transparent: boolean;
   /**
+   * Scales the opacity of each original material a highlight preserves,
+   * instead of replacing it: 0.5 fades an opaque frame to 0.5 and a pane of
+   * glass at 0.2 to 0.1, and 1 shows both as they are.
+   */
+  opacityScale?: number;
+  /**
    * Internal flag to preserve base material properties when applying highlights.
    * When true, only explicitly set properties (like color or opacity) are applied.
    */

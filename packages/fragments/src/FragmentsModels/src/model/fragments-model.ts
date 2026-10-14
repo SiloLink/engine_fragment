@@ -961,9 +961,20 @@ export class FragmentsModel implements IFragmentsModel<true> {
    * Applies an opacity to the specified items while preserving original material properties (like color).
    * @param localIds - The local IDs of the items to change opacity for. If undefined, all items will be affected.
    * @param opacity - The opacity to apply (0 to 1).
+   * @param options.relative - Scale each original material's opacity by `opacity` instead of replacing it,
+   * so items made of several materials, such as a frame and its glass, fade together and show as they are at 1.
    */
-  setOpacity(localIds: number[] | undefined, opacity: number) {
-    return this._highlightManager.setOpacity(this, localIds, opacity);
+  setOpacity(
+    localIds: number[] | undefined,
+    opacity: number,
+    options?: { relative?: boolean },
+  ) {
+    return this._highlightManager.setOpacity(
+      this,
+      localIds,
+      opacity,
+      options?.relative === true,
+    );
   }
 
   /**

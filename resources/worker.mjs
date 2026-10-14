@@ -25702,9 +25702,15 @@ class MaterialUtils {
       return combined;
     }
     for (const property of _explicitProps ?? []) {
+      if (property === "opacityScale") continue;
       if (definition[property] !== void 0) {
         combined[property] = definition[property];
       }
+    }
+    const scale = definition.opacityScale;
+    if (scale !== void 0) {
+      combined.opacity = (original.opacity ?? 1) * scale;
+      combined.transparent = original.transparent || combined.opacity < 1;
     }
     return combined;
   }
@@ -38233,18 +38239,32 @@ class HighlightHelper {
       return rest;
     });
   }
-  setOpacity(model, items, opacity) {
-    const material = {
+  /**
+   * An absolute opacity replaces each original material's opacity; a relative
+   * one scales it. Each names the other's properties too, so the latest call
+   * replaces an earlier opacity of either kind while color highlights stay.
+   */
+  setOpacity(model, items, opacity, relative = false) {
+    const material = relative ? {
+      opacityScale: opacity,
+      preserveOriginalMaterial: true,
+      _explicitProps: ["opacityScale", "opacity", "transparent"]
+    } : {
       opacity,
       transparent: opacity < 1,
       preserveOriginalMaterial: true,
-      _explicitProps: ["opacity", "transparent"]
+      _explicitProps: ["opacity", "transparent", "opacityScale"]
     };
     this.highlight(model, items, material);
   }
   resetOpacity(model, items) {
     this.updateHighlightDefinition(model, items, (current) => {
-      const { opacity: _o, transparent: _t, ...rest } = current;
+      const {
+        opacity: _o,
+        transparent: _t,
+        opacityScale: _s,
+        ...rest
+      } = current;
       return rest;
     });
   }
@@ -38931,8 +38951,8 @@ class VirtualFragmentsModel {
   resetColor(items) {
     this._highlightHelper.resetColor(this, items);
   }
-  setOpacity(items, opacity) {
-    this._highlightHelper.setOpacity(this, items, opacity);
+  setOpacity(items, opacity, relative = false) {
+    this._highlightHelper.setOpacity(this, items, opacity, relative);
   }
   resetOpacity(items) {
     this._highlightHelper.resetOpacity(this, items);

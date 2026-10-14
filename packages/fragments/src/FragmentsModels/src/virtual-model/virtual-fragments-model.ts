@@ -326,8 +326,8 @@ export class VirtualFragmentsModel {
     this._highlightHelper.resetColor(this, items);
   }
 
-  setOpacity(items: number[], opacity: number) {
-    this._highlightHelper.setOpacity(this, items, opacity);
+  setOpacity(items: number[], opacity: number, relative = false) {
+    this._highlightHelper.setOpacity(this, items, opacity, relative);
   }
 
   resetOpacity(items: number[]) {

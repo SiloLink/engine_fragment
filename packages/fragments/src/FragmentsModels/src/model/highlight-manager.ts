@@ -40,8 +40,13 @@ export class HighlightManager {
     model: FragmentsModel,
     localIds: number[] | undefined,
     opacity: number,
+    relative = false,
   ) {
-    await model.threads.invoke(model.modelId, "setOpacity", [localIds, opacity]);
+    await model.threads.invoke(model.modelId, "setOpacity", [
+      localIds,
+      opacity,
+      relative,
+    ]);
   }
 
   async resetOpacity(model: FragmentsModel, localIds: number[] | undefined) {
