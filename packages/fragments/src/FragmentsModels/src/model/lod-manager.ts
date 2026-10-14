@@ -56,14 +56,13 @@ export class LODManager {
 
     const material = mesh.material[0];
 
-    // Resolve each highlighted item's color (parallel to highlightData chunks)
-    // and write them into a per-instance attribute, instead of collapsing every
-    // item to highlightIds[0] on a single uniform. Opacity stays a single value
-    // (taken from the first definition, as before) since #230 is about color.
+    // Resolve each highlighted item's color and opacity (parallel to
+    // highlightData chunks) and write them into per-instance attributes,
+    // instead of collapsing every item to highlightIds[0] on a single uniform:
+    // a colored item and a faded one in the same tile each keep their own.
     const colors: (THREE.Color | undefined)[] = [];
-    let opacity = material.highlightOpacity;
+    const opacities: (number | undefined)[] = [];
     let transparent = material.transparent;
-    let opacitySet = false;
 
     for (let i = 0; i < highlightIds.length; ++i) {
       const definition = this._materials.getHighlightProps(
@@ -73,20 +72,22 @@ export class LODManager {
       );
       if (!definition) {
         colors.push(undefined);
+        opacities.push(undefined);
         continue;
       }
       colors.push(
         definition.color ? new THREE.Color(definition.color) : undefined,
       );
-      if (!opacitySet) {
-        opacity = definition.opacity;
-        opacitySet = true;
-      }
+      opacities.push(definition.opacity);
       transparent = definition.opacity < 1 || transparent;
     }
 
-    LodHelper.setLodHighlightColors(mesh.geometry, highlightData, colors);
-    material.highlightOpacity = opacity;
+    LodHelper.setLodHighlightAppearance(
+      mesh.geometry,
+      highlightData,
+      colors,
+      opacities,
+    );
     material.transparent = transparent;
   }
 

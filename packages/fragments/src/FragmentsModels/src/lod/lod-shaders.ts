@@ -8,6 +8,7 @@ export class LodShaders {
             attribute vec3 itemFirst;
             attribute vec3 itemLast;
             attribute vec3 itemHighlightColor;
+            attribute float itemHighlightOpacity;
 
             float lodWidth = 2.0;
             
@@ -23,6 +24,7 @@ export class LodShaders {
                 
             varying float vHighlight;
             varying vec3 vHighlightColor;
+            varying float vHighlightOpacity;
 
             void main() {
                 if (itemFilter == 0.0) {
@@ -32,6 +34,7 @@ export class LodShaders {
 
                 vHighlight = itemFilter > 1.5 ? 1.0 : 0.0;
                 vHighlightColor = itemHighlightColor;
+                vHighlightOpacity = itemHighlightOpacity;
 
                 vec4 rawFirst = vec4(itemFirst, 1.0);
                 vec4 rawLast = vec4(itemLast, 1.0);
@@ -99,14 +102,16 @@ export class LodShaders {
 
             varying float vHighlight;
             varying vec3 vHighlightColor;
+            varying float vHighlightOpacity;
 
             void main() {
                 #include <clipping_planes_fragment>
-                // Per-instance highlight color (carried via the itemHighlightColor
-                // instanced attribute) so that, at LOD/WIRES distance, each item keeps
-                // its own color instead of all collapsing to a single uniform. See #230.
+                // Per-instance highlight color and opacity (carried via the
+                // itemHighlightColor and itemHighlightOpacity instanced attributes) so
+                // that, at LOD/WIRES distance, each item keeps its own instead of all
+                // collapsing to a single uniform. See #230.
                 vec3 color = mix(lodColor, vHighlightColor, vHighlight);
-                float alpha = mix(lodOpacity, highlightOpacity, vHighlight);
+                float alpha = mix(lodOpacity, vHighlightOpacity, vHighlight);
                 gl_FragColor = vec4(color, alpha);
                 #include <colorspace_fragment>
             }

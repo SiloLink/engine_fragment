@@ -12,6 +12,7 @@
 * Draw a shown highlighted sample only with its highlight material again, and a hidden one with neither. Passing the real visibility to `updateTile()` also put highlighted samples in the tile material's visible ranges, so they were drawn twice and the opaque tile material hid every translucent highlight, such as `setOpacity()`.
 * Reuse identical preserved highlight materials across items and repeated updates, while keeping depth, transparency and inheritance settings distinct.
 * Settle forced updates when the scene is empty or the last model is removed, without waiting for a worker FINISH that can no longer arrive.
+* Give each highlighted item of an LOD tile its own opacity next to its own color, instead of the first highlight's opacity for the whole tile.
 
 ### ⚠ BREAKING CHANGES
 

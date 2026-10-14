@@ -114,34 +114,42 @@ export class LodHelper {
     itemFilter.needsUpdate = true;
   }
 
-  // Writes a per-instance highlight color over the same chunk ranges that
-  // setLodHighlight flags as highlighted, so each item keeps its own color at
-  // LOD/WIRES distance instead of all collapsing to a single uniform (#230).
-  // `colors[i]` is parallel to `data`'s chunks; undefined entries are skipped.
-  static setLodHighlightColors(
+  // Writes a per-instance highlight color and opacity over the same chunk
+  // ranges that setLodHighlight flags as highlighted, so each item keeps its
+  // own at LOD/WIRES distance instead of all collapsing to a single uniform
+  // (#230). `colors[i]` and `opacities[i]` are parallel to `data`'s chunks;
+  // undefined entries are skipped.
+  static setLodHighlightAppearance(
     geometry: LODGeometry,
     data: any,
     colors: (THREE.Color | undefined)[],
+    opacities: (number | undefined)[],
   ): void {
     const itemFilter = geometry.getItemFilter();
     if (!itemFilter) return;
     const count = itemFilter.count;
 
-    let colorAttr = this.getInstancedAttribute(geometry, "itemHighlightColor");
-    if (!colorAttr || colorAttr.count !== count) {
-      // Default white matches the previous highlightColor uniform default for
-      // any highlighted-but-uncolored instance.
-      colorAttr = new THREE.InstancedBufferAttribute(
-        new Float32Array(count * 3).fill(1),
-        3,
-      );
-      geometry.setAttribute("itemHighlightColor", colorAttr);
-    }
+    // Default white and opaque match the previous highlight uniforms for any
+    // highlighted instance without its own color or opacity.
+    const colorAttr = this.getHighlightAttribute(
+      geometry,
+      "itemHighlightColor",
+      count,
+      3,
+    );
+    const opacityAttr = this.getHighlightAttribute(
+      geometry,
+      "itemHighlightOpacity",
+      count,
+      1,
+    );
 
-    const bufferData = colorAttr.array as Float32Array;
+    const colorData = colorAttr.array as Float32Array;
+    const opacityData = opacityAttr.array as Float32Array;
     for (let i = 0; i < data.position.length; ++i) {
       const color = colors[i];
-      if (!color) continue;
+      const opacity = opacities[i];
+      if (!color && opacity === undefined) continue;
       const first = Math.floor(data.position[i] / 2);
       const size = data.size[i] / 2;
       // Clamp to `count`. The "all" sentinel (and any oversized size) must not
@@ -149,12 +157,33 @@ export class LodHelper {
       // this manual loop would otherwise spin billions of times and hang.
       const end = size === 0xffffffff ? count : Math.min(first + size, count);
       for (let inst = first; inst < end; ++inst) {
-        bufferData[inst * 3] = color.r;
-        bufferData[inst * 3 + 1] = color.g;
-        bufferData[inst * 3 + 2] = color.b;
+        if (color) {
+          colorData[inst * 3] = color.r;
+          colorData[inst * 3 + 1] = color.g;
+          colorData[inst * 3 + 2] = color.b;
+        }
+        if (opacity !== undefined) opacityData[inst] = opacity;
       }
     }
     colorAttr.needsUpdate = true;
+    opacityAttr.needsUpdate = true;
+  }
+
+  private static getHighlightAttribute(
+    geometry: LODGeometry,
+    name: string,
+    count: number,
+    itemSize: number,
+  ) {
+    let attribute = this.getInstancedAttribute(geometry, name);
+    if (!attribute || attribute.count !== count) {
+      attribute = new THREE.InstancedBufferAttribute(
+        new Float32Array(count * itemSize).fill(1),
+        itemSize,
+      );
+      geometry.setAttribute(name, attribute);
+    }
+    return attribute;
   }
 
   static getInstancedAttribute(
