@@ -18,6 +18,11 @@ export class VirtualMaterialController {
   // references it any more.
   private _modelMaterialCount = 0;
 
+  readonly opacityGroups = new Map<
+    number,
+    { opacity: number; relative: boolean }
+  >();
+
   constructor(modelId: string, onTransfer: VirtualMaterialTransfer) {
     this._modelId = modelId;
     this._onTransfer = onTransfer;
@@ -53,7 +58,24 @@ export class VirtualMaterialController {
     const material = this.getRequired(materialId);
     const highlight = highlightId ? this.getRequired(highlightId) : undefined;
     const effective = MaterialUtils.mergeHighlight(material, highlight);
-    return effective.opacity === 1 && !effective.transparent;
+    const group =
+      highlight?.opacityGroup === undefined
+        ? undefined
+        : this.opacityGroups.get(highlight.opacityGroup);
+    const opacity = group
+      ? (group.relative ? material.opacity : 1) * group.opacity
+      : effective.opacity;
+    const transparent = group
+      ? (group.relative && material.transparent) || opacity < 1
+      : effective.transparent;
+    return opacity === 1 && !transparent;
+  }
+
+  /** Live groups keep canonical triangle order across scalar opacity changes. */
+  shouldUseOptimizedLayout(materialId: number, highlightId = 0) {
+    if (highlightId && this.getRequired(highlightId).opacityGroup !== undefined)
+      return false;
+    return this.isOpaque(materialId, highlightId);
   }
 
   transfer(materials: MaterialDefinition[]): number[] {

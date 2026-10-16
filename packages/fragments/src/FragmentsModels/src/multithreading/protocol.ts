@@ -62,6 +62,12 @@ export interface TileRenderData {
   highlightIds?: Uint32Array;
 }
 
+export interface TileIndexUpdate {
+  /** Offset in the tile's complete index buffer, before visibility compaction. */
+  start: number;
+  indices: Uint16Array;
+}
+
 interface TileUpdate {
   tileRequestClass: TileRequestClass.UPDATE;
   modelId: string;
@@ -70,6 +76,7 @@ interface TileUpdate {
   material?: number;
   currentLod?: CurrentLod;
   tileData: TileRenderData;
+  indexUpdates?: TileIndexUpdate[];
 }
 
 export interface TileCreate extends Omit<TileUpdate, "tileRequestClass"> {

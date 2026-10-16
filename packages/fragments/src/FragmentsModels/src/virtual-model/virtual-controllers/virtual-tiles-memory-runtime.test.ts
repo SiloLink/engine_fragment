@@ -60,14 +60,14 @@ function createModel(modelId: string) {
       get: () => new Box3(new Vector3(), new Vector3(1, 1, 0)),
     },
     _materialController: {
-      isOpaque: (_material: number, highlight: number) => highlight !== 9,
+      shouldUseOptimizedLayout: (_material: number, highlight: number) =>
+        highlight !== 9,
     },
     _samples: samples,
     _virtualView: { graphicThreshold: Infinity },
     _virtualMeshes: new Map(),
     _tiles: new Map(),
     _tilesChanged: new Set(),
-    _tilesToRebuild: new Set(),
     _meshConnection: {
       process(request: any) {
         if (request.positions) sentPositions.push(request.positions);
@@ -178,7 +178,7 @@ describe("resident tile memory", () => {
     ]);
   });
 
-  it("replaces the resident credit during an opacity layout rebuild", () => {
+  it("keeps resident attributes and memory credit when opacity changes index order", () => {
     const model = createModel("first");
     model.addTile(1);
     model.realize(1);
@@ -186,20 +186,21 @@ describe("resident tile memory", () => {
     model.samples.setHighlight(0, 9);
 
     model.controller.updateTile(1, 0, 9, false);
-    model.controller.rebuildTiles();
+    model.controller.update(0);
 
     expect(graphicsMemory._graphicMemoryConsumed).toBe(before);
     expect(model.posted.map((request) => request.tileRequestClass)).toEqual([
       TileRequestClass.CREATE,
-      TileRequestClass.DELETE,
-      TileRequestClass.CREATE,
+      TileRequestClass.UPDATE,
     ]);
+    expect(model.posted[1].indexUpdates[0].indices.byteLength).toBe(12);
+    expect(model.sentPositions).toHaveLength(1);
     expect(
       model.sentPositions.every((positions) => positions.byteLength === 0),
     ).toBe(true);
   });
 
-  it("does not retain old credit when rebuilding a deleted tile fails", () => {
+  it("retains resident geometry if preparing an index update fails", () => {
     const first = createModel("first");
     const second = createModel("second");
     const firstTile = first.addTile(1);
@@ -207,16 +208,18 @@ describe("resident tile memory", () => {
     first.realize(1);
     second.realize(1);
     first.samples.setHighlight(0, 9);
-    first.controller.updateTile(1, 0, 9, false);
     first.fetchSample.mockImplementationOnce(() => {
       throw new Error("Unable to construct fixture shell");
     });
 
-    expect(() => first.controller.rebuildTiles()).toThrow(
+    expect(() => first.controller.updateTile(1, 0, 9, false)).toThrow(
       "Unable to construct fixture shell",
     );
-    expect(firstTile.notVirtual).toBe(false);
-    expect(graphicsMemory._graphicMemoryConsumed).toBe(secondTile.usedMemory);
+    expect(firstTile.notVirtual).toBe(true);
+    expect(graphicsMemory._graphicMemoryConsumed).toBe(
+      firstTile.usedMemory + secondTile.usedMemory,
+    );
+    expect(first.posted).toHaveLength(1);
     first.controller.dispose();
     expect(graphicsMemory._graphicMemoryConsumed).toBe(secondTile.usedMemory);
   });

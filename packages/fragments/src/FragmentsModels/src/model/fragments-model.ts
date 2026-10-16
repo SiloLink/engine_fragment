@@ -36,6 +36,7 @@ import { DataManager } from "./data-manager";
 import { EditManager } from "./edit-manager";
 import { IFragmentsModel } from "./fragments-model-interface";
 import { GridsConfig, GridsManager } from "./grids-manager";
+import { OpacityGroup, OpacityGroupOptions } from "./opacity-group";
 import { HighlightManager } from "./highlight-manager";
 import { ItemsManager } from "./items-manager";
 import { RaycastManager } from "./raycast-manager";
@@ -116,6 +117,8 @@ export class FragmentsModel implements IFragmentsModel<true> {
   private readonly _raycastManager = new RaycastManager();
   private readonly _visibilityManager = new VisibilityManager();
   private readonly _highlightManager = new HighlightManager();
+  private readonly _opacityGroups = new Set<OpacityGroup>();
+  private static _nextOpacityGroupId = 0;
   private readonly _sectionManager = new SectionManager();
   private readonly _dataManager = new DataManager();
   private readonly _sequenceManager = new SequenceManager();
@@ -248,7 +251,10 @@ export class FragmentsModel implements IFragmentsModel<true> {
     this.tiles.onBeforeDelete.add(({ value: mesh }) => {
       this.object.remove(mesh);
       mesh.geometry.dispose();
-      MiscHelper.forEach(mesh.material, (mat) => mat.dispose());
+      MiscHelper.forEach(mesh.material, (mat) => {
+        if (!this._meshManager.materials.releaseTileMaterial(this.modelId, mat))
+          mat.dispose();
+      });
     });
   }
 
@@ -264,6 +270,8 @@ export class FragmentsModel implements IFragmentsModel<true> {
    *   loaded model without a blank frame.
    */
   async dispose(options?: { keepInScene?: boolean }) {
+    for (const group of this._opacityGroups) group.invalidate(false);
+    this._opacityGroups.clear();
     this._isLoaded = false;
     this.visibleItems.clear();
     this._itemLocalIds = new Uint32Array();
@@ -295,6 +303,9 @@ export class FragmentsModel implements IFragmentsModel<true> {
     for (const [, mesh] of this.tiles) {
       this.object.remove(mesh);
       mesh.geometry.dispose();
+      MiscHelper.forEach(mesh.material, (mat) => {
+        this._meshManager.materials.releaseTileMaterial(this.modelId, mat);
+      });
     }
     this.tiles.clear();
 
@@ -955,6 +966,46 @@ export class FragmentsModel implements IFragmentsModel<true> {
    */
   resetColor(localIds: number[] | undefined) {
     return this._highlightManager.resetColor(this, localIds);
+  }
+
+  /**
+   * Create a reusable opacity control. Initialize membership once, then adjust
+   * the scalar without rebuilding materials or requesting a Fragments view.
+   * Apply a normal FragmentsModels.update after creation or membership changes.
+   */
+  async createOpacityGroup(localIds: number[], options: OpacityGroupOptions) {
+    const id = ++FragmentsModel._nextOpacityGroupId;
+    const group: OpacityGroup = new OpacityGroup(
+      this,
+      this._meshManager.materials,
+      id,
+      options,
+      () => this._opacityGroups.delete(group),
+    );
+    this._opacityGroups.add(group);
+    try {
+      await this.threads.invoke(this.modelId, "createOpacityGroup", [
+        id,
+        localIds,
+        options.opacity,
+        options.relative ?? false,
+      ]);
+      if (group.isDisposed)
+        throw new Error(
+          "Fragments: model was disposed while creating an opacity group.",
+        );
+      return group;
+    } catch (error) {
+      try {
+        await group.dispose();
+      } catch {
+        /* Preserve the initiating error. */
+      } finally {
+        group.invalidate();
+        this._opacityGroups.delete(group);
+      }
+      throw error;
+    }
   }
 
   /**

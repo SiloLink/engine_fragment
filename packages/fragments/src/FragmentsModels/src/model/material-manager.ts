@@ -11,7 +11,14 @@ import {
 import { CRC } from "../utils";
 import { LodMaterial } from "../lod";
 import { DataMap } from "../../../Utils";
+import type { OpacityGroupOptions } from "./opacity-group";
 import { MaterialUtils } from "../utils/geometry/material-utils";
+
+type LiveOpacityState = {
+  opacity: number;
+  relative: boolean;
+  bindings: Set<() => void>;
+};
 
 export class MaterialManager {
   readonly list = new DataMap<number, BIMMaterial>();
@@ -20,6 +27,66 @@ export class MaterialManager {
   private readonly _definitions = new Map<string, MaterialDefinition[]>();
   private readonly _idGenerator = new CRC();
   private readonly white = 0xffffffff;
+  private _nextTileMaterialId = 0;
+  private readonly _tileMaterialIds = new WeakMap<THREE.Material, number>();
+  private readonly _opacityGroups = new Map<
+    string,
+    Map<number, LiveOpacityState>
+  >();
+
+  createOpacityGroup(
+    modelId: string,
+    id: number,
+    options: OpacityGroupOptions,
+  ) {
+    let groups = this._opacityGroups.get(modelId);
+    if (!groups) this._opacityGroups.set(modelId, (groups = new Map()));
+    groups.set(id, {
+      opacity: options.opacity,
+      relative: options.relative ?? false,
+      bindings: new Set(),
+    });
+  }
+
+  setOpacityGroupValue(modelId: string, id: number, opacity: number) {
+    const group = this._opacityGroups.get(modelId)?.get(id);
+    if (!group) throw new Error("Fragments: opacity group has been disposed.");
+    group.opacity = opacity;
+    for (const update of group.bindings) update();
+  }
+
+  removeOpacityGroup(modelId: string, id: number, restore = true) {
+    const groups = this._opacityGroups.get(modelId);
+    const group = groups?.get(id);
+    groups?.delete(id);
+    // Existing tiles return to their base opacity until the membership update
+    // replaces their highlight groups. Newer owners use distinct materials.
+    if (group && restore) for (const update of group.bindings) update();
+    group?.bindings.clear();
+    if (groups?.size === 0) this._opacityGroups.delete(modelId);
+  }
+
+  bindOpacityGroup(modelId: string, id: number, update: () => void) {
+    const bindings = this._opacityGroups.get(modelId)?.get(id)?.bindings;
+    bindings?.add(update);
+    return () => {
+      bindings?.delete(update);
+    };
+  }
+
+  resolveOpacity(modelId: string, definition: MaterialDefinition) {
+    const group =
+      definition.opacityGroup === undefined
+        ? undefined
+        : this._opacityGroups.get(modelId)?.get(definition.opacityGroup);
+    if (!group) return definition;
+    const opacity = (group.relative ? definition.opacity : 1) * group.opacity;
+    return {
+      ...definition,
+      opacity,
+      transparent: (group.relative && definition.transparent) || opacity < 1,
+    };
+  }
 
   static resetColors(definitions: MaterialDefinition[]) {
     for (const definition of definitions) {
@@ -38,6 +105,7 @@ export class MaterialManager {
   }
 
   dispose(modelId: string) {
+    this._opacityGroups.delete(modelId);
     this._definitions.delete(modelId);
     const ids = this._modelMaterialMapping.get(modelId);
     if (!ids) return;
@@ -57,18 +125,39 @@ export class MaterialManager {
    * while the outgoing model's tiles still render normally.
    */
   releaseModelSlot(modelId: string) {
+    this._opacityGroups.delete(modelId);
     this._definitions.delete(modelId);
     this._modelMaterialMapping.delete(modelId);
   }
 
   get(data: MaterialDefinition, request: any) {
+    const id = this.getMaterialId(data, request);
+    return this.getUniqueMaterial(id, data, request);
+  }
+
+  /**
+   * LOD transparency depends on every highlighted range in a tile. Allocate
+   * its base material separately, while keeping it in the public registry so
+   * renderer configuration and clipping updates reach it.
+   */
+  createTileMaterial(request: any) {
+    const definition = this.getDefinitionFromRequest(request);
+    this.getMaterialId(definition, request);
+    this._idGenerator.compute("tile");
+    this._idGenerator.compute(++this._nextTileMaterialId);
+    const id = this._idGenerator.value;
+    const material = this.getUniqueMaterial(id, definition, request);
+    this._tileMaterialIds.set(material, id);
+    return material;
+  }
+
+  private getMaterialId(data: MaterialDefinition, request: any) {
     const { modelId, objectClass, currentLod, templateId } = request;
     if (!(modelId && objectClass !== undefined && currentLod !== undefined)) {
       throw new Error(
         "Fragments: material definition information is missing to create the material.",
       );
     }
-
     this._idGenerator.fromMaterialData({
       modelId,
       objectClass,
@@ -76,11 +165,19 @@ export class MaterialManager {
       templateId,
       ...data,
     });
+    return this._idGenerator.value;
+  }
 
-    const { value: id } = this._idGenerator;
-
-    const material = this.getUniqueMaterial(id, data, request);
-    return material;
+  releaseTileMaterial(modelId: string, material: THREE.Material) {
+    const id = this._tileMaterialIds.get(material);
+    if (id === undefined) return false;
+    this._tileMaterialIds.delete(material);
+    if (this.list.get(id) === material) {
+      this.list.delete(id);
+      this._modelMaterialMapping.get(modelId)?.delete(id);
+    }
+    material.dispose();
+    return true;
   }
 
   /**
@@ -152,14 +249,16 @@ export class MaterialManager {
   }
 
   getFromRequest(request: any) {
+    return this.get(this.getDefinitionFromRequest(request), request);
+  }
+
+  private getDefinitionFromRequest(request: any) {
     const { material: index, modelId } = request;
-    const modelMaterials = this._definitions.get(modelId);
-    const definition = modelMaterials?.[index];
+    const definition = this._definitions.get(modelId)?.[index];
     if (!definition) {
       throw new Error(`Fragments: Missing mesh material for index ${index}`);
     }
-    const material = this.get(definition, request);
-    return material;
+    return definition;
   }
 
   private newLODMaterial(data: MaterialData, request: any) {
@@ -256,7 +355,25 @@ export class MaterialManager {
     const modelId = request.modelId;
     const material = this.list.get(id);
     if (material) return material;
-    const newMaterial = this.new(data, request);
+    const newMaterial = this.new(this.resolveOpacity(modelId, data), request);
+    if (data.opacityGroup !== undefined) {
+      const apply = () => {
+        const effective = this.resolveOpacity(modelId, data);
+        newMaterial.opacity = effective.opacity;
+        const transparent = effective.transparent || effective.opacity < 1;
+        if (newMaterial.transparent !== transparent) {
+          newMaterial.transparent = transparent;
+          newMaterial.needsUpdate = true;
+        }
+        newMaterial.visible = effective.opacity > 0;
+        newMaterial.depthWrite =
+          effective.opacity > 0 && (data.depthWrite ?? true);
+        if (newMaterial instanceof LodMaterial)
+          newMaterial.lodOpacity = effective.opacity;
+      };
+      this.bindOpacityGroup(modelId, data.opacityGroup, apply);
+      apply();
+    }
     this.list.set(id, newMaterial);
     this.addMaterialToModel(modelId, id);
     return this.list.get(id)!;

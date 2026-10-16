@@ -55,6 +55,29 @@ describe("queued tile requests", () => {
     expect(updated.list).toEqual([update(1, "new")]);
   });
 
+  it.each([TileRequestClass.CREATE, TileRequestClass.UPDATE])(
+    "retains the latest index order for each chunk when coalescing into %s",
+    (kind) => {
+      const first = {
+        ...tileRequest(kind, 1, "initial"),
+        indexUpdates: [{ start: 0, indices: new Uint16Array([0, 2, 1]) }],
+      };
+      const manager = queue(first);
+      const replacement = { start: 0, indices: new Uint16Array([2, 1, 0]) };
+      const adjacent = { start: 3, indices: new Uint16Array([4, 3, 5]) };
+      manager.add([
+        { ...update(1, "changed"), indexUpdates: [replacement, adjacent] },
+        update(1, "visibility-only"),
+      ]);
+
+      expect(manager.list).toHaveLength(1);
+      expect(manager.list[0]).toMatchObject({
+        tileData: "visibility-only",
+        indexUpdates: [replacement, adjacent],
+      });
+    },
+  );
+
   it("keeps UPDATEs of different models with the same tile id apart", () => {
     const manager = queue(remove(1, "a"), create(1, "a-old", "a"));
 

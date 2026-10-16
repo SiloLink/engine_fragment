@@ -13809,6 +13809,9 @@ class MultithreadingHelper {
     this.addRequestTileData(request, content, "visibilityData");
     const extras = ["highlightIds"];
     this.addRequestTileData(request, content, "highlightData", extras);
+    for (const update of request.indexUpdates ?? []) {
+      content.push(update.indices.buffer);
+    }
   }
   static addRequestContent(id, request, content) {
     if (!request[id]) return;
@@ -31663,7 +31666,6 @@ class VirtualTilesController {
   _modelId;
   _rendersTiles;
   _shells;
-  _tilesToRebuild = /* @__PURE__ */ new Set();
   _lastView = {
     rotation: new Vector3(),
     location: new Vector3()
@@ -31947,7 +31949,6 @@ class VirtualTilesController {
   update(time) {
     if (this._updateFailed) return;
     this.updateTiles(time);
-    this.rebuildTiles();
     for (const tileId of this._tilesChanged) {
       const tile = this._tiles.get(tileId);
       this._meshConnection.process({
@@ -31957,8 +31958,10 @@ class VirtualTilesController {
         objectClass: tile.objectClass,
         material: tile.materialId,
         tileData: this.getTileData(tile),
+        indexUpdates: tile.indexUpdatesBySample ? [...tile.indexUpdatesBySample.values()].flat() : void 0,
         currentLod: tile.lod
       });
+      tile.indexUpdatesBySample?.clear();
     }
     this._tilesChanged.clear();
     this.notifyUpdateFinished();
@@ -32244,7 +32247,7 @@ class VirtualTilesController {
     return { highlightData, highlightIds };
   }
   setupTileSampleAttributes(tile, location, geometry, sample) {
-    const renderLayout = this.getRenderLayout(tile, geometry, sample.sample);
+    const renderLayout = this.getRenderLayout(tile, geometry);
     const oldToNewVertex = renderLayout?.oldToNewVertex;
     const resultPosition = tile.vertexLocation[location] * 3;
     for (let i = 0; i < geometry.positionBuffer.length; i += 3) {
@@ -32274,11 +32277,14 @@ class VirtualTilesController {
     if (tile.indexBuffer) {
       const indicesPosition = tile.indexLocation[location];
       const position = tile.vertexLocation[location];
-      const indices = renderLayout ? renderLayout.indices : geometry.indexBuffer;
-      for (let i = 0; i < geometry.indexCount; i++) {
-        const result = indices[i] + position;
-        tile.indexBuffer[i + indicesPosition] = result;
-      }
+      this.writeSampleIndices(
+        tile,
+        geometry,
+        sample.sample,
+        tile.indexBuffer,
+        indicesPosition,
+        position
+      );
     }
     if (tile.faceIdBuffer && geometry.faceIdBuffer) {
       const sampleOffset = sample.sample * 100;
@@ -32308,14 +32314,51 @@ class VirtualTilesController {
       }
     }
   }
-  getRenderLayout(tile, geometry, sampleId) {
-    if (!this.shouldUseRenderLayout(tile, sampleId)) {
-      return void 0;
+  getRenderLayout(tile, geometry) {
+    if (tile.objectClass === ObjectClass.SHELL && tile.lod === CurrentLod.GEOMETRY) {
+      return geometry.renderLayout;
     }
-    return geometry.renderLayout;
+    return void 0;
   }
-  shouldUseRenderLayout(tile, sampleId) {
-    return tile.objectClass === ObjectClass.SHELL && tile.lod === CurrentLod.GEOMETRY && this._materialController.isOpaque(
+  writeSampleIndices(tile, geometry, sampleId, target, offset, vertexOffset) {
+    const layout = this.getRenderLayout(tile, geometry);
+    const optimized = layout && this.shouldUseOptimizedLayout(tile, sampleId);
+    const indices = optimized ? layout.indices : geometry.indexBuffer;
+    for (let i = 0; i < indices.length; i++) {
+      const vertex = layout && !optimized ? layout.oldToNewVertex[indices[i]] : indices[i];
+      target[offset + i] = vertex + vertexOffset;
+    }
+  }
+  updateSampleIndices(tile, sampleId) {
+    const sample = this.fetchSample(sampleId, tile.lod);
+    const span = tile.sampleSpans.get(sampleId);
+    const updates = [];
+    const end = span.start + span.count;
+    for (let location = span.start; location < end; location++) {
+      const geometry = this.getSampleGeometries(
+        sample,
+        tile.geometriesLocation[location]
+      );
+      const indices = new Uint16Array(geometry.indexCount);
+      this.writeSampleIndices(
+        tile,
+        geometry,
+        sampleId,
+        indices,
+        0,
+        tile.vertexLocation[location]
+      );
+      updates.push({ start: tile.indexLocation[location], indices });
+    }
+    tile.indexUpdatesBySample ??= /* @__PURE__ */ new Map();
+    tile.indexUpdatesBySample.set(sampleId, updates);
+    tile.optimizedLayoutBySample.set(
+      sampleId,
+      this.shouldUseOptimizedLayout(tile, sampleId)
+    );
+  }
+  shouldUseOptimizedLayout(tile, sampleId) {
+    return tile.objectClass === ObjectClass.SHELL && tile.lod === CurrentLod.GEOMETRY && this._materialController.shouldUseOptimizedLayout(
       tile.materialId,
       this._samples.getHighlight(sampleId)
     );
@@ -32407,7 +32450,7 @@ class VirtualTilesController {
     tile.geometriesLocation = [];
     tile.positionCount = 0;
     tile.sampleSpans = /* @__PURE__ */ new Map();
-    tile.renderLayoutOpaqueBySample = /* @__PURE__ */ new Map();
+    tile.optimizedLayoutBySample = /* @__PURE__ */ new Map();
     tile.faceIdBuffer = new Uint32Array(0);
     return tile;
   }
@@ -32478,6 +32521,7 @@ class VirtualTilesController {
     a.vertexLocation.push((a.positionCount || 0) / 3);
   }
   buildNewVirtualTile(tile, tileId) {
+    tile.indexUpdatesBySample?.clear();
     this.constructTile(tile);
     this.loadTile(tileId, tile);
     tile.notVirtual = true;
@@ -32486,16 +32530,6 @@ class VirtualTilesController {
     delete tile.normalBuffer;
     delete tile.faceIdBuffer;
     delete tile.ids;
-  }
-  rebuildTiles() {
-    for (const tileId of this._tilesToRebuild) {
-      const tile = this._tiles.get(tileId);
-      if (!tile?.notVirtual) continue;
-      this.deleteGeometry(tileId);
-      this.releaseTileMemory(tile);
-      this.buildNewVirtualTile(tile, tileId);
-    }
-    this._tilesToRebuild.clear();
   }
   deleteTileIfNeeded(tile, tileId) {
     const shouldDelete = this.getShouldDeleteTile(tile);
@@ -32643,6 +32677,7 @@ class VirtualTilesController {
     this._tileIdGenerator.compute(lod);
   }
   deleteGeometry(tileId) {
+    this._tiles.get(tileId)?.indexUpdatesBySample?.clear();
     this._meshConnection.process({
       tileRequestClass: TileRequestClass.DELETE,
       modelId: this._modelId,
@@ -32727,14 +32762,10 @@ class VirtualTilesController {
     const tile = this._tiles.get(tileId);
     this.updateTileData(tile, sample, visible, highlight);
     if (tile.notVirtual) {
-      const realizedLayoutOpaque = tile.renderLayoutOpaqueBySample?.get(sample);
-      const renderLayoutClassChanged = tile.objectClass === ObjectClass.SHELL && tile.lod === CurrentLod.GEOMETRY && realizedLayoutOpaque !== void 0 && realizedLayoutOpaque !== this.shouldUseRenderLayout(tile, sample);
-      if (renderLayoutClassChanged) {
-        this._tilesChanged.delete(tileId);
-        this._tilesToRebuild.add(tileId);
-      } else if (!this._tilesToRebuild.has(tileId)) {
-        this._tilesChanged.add(tileId);
-      }
+      const realizedOptimizedLayout = tile.optimizedLayoutBySample?.get(sample);
+      const renderLayoutClassChanged = tile.objectClass === ObjectClass.SHELL && tile.lod === CurrentLod.GEOMETRY && realizedOptimizedLayout !== void 0 && realizedOptimizedLayout !== this.shouldUseOptimizedLayout(tile, sample);
+      if (renderLayoutClassChanged) this.updateSampleIndices(tile, sample);
+      this._tilesChanged.add(tileId);
       return;
     }
     this.buildNewVirtualTile(tile, tileId);
@@ -32827,13 +32858,13 @@ class VirtualTilesController {
       tile.faceIdBuffer = new Uint32Array(tile.positionCount / 3);
       tile.usedMemory += tile.faceIdBuffer.byteLength;
     }
-    tile.renderLayoutOpaqueBySample ??= /* @__PURE__ */ new Map();
-    tile.renderLayoutOpaqueBySample.clear();
+    tile.optimizedLayoutBySample ??= /* @__PURE__ */ new Map();
+    tile.optimizedLayoutBySample.clear();
     const isStart = !tile.location;
     for (const [id, span] of tile.sampleSpans) {
-      tile.renderLayoutOpaqueBySample.set(
+      tile.optimizedLayoutBySample.set(
         id,
-        this.shouldUseRenderLayout(tile, id)
+        this.shouldUseOptimizedLayout(tile, id)
       );
       const sample = this.fetchSample(id, tile.lod);
       if (sample && sample.geometries) {
@@ -32995,6 +33026,7 @@ class VirtualMaterialController {
   // it was allocated by a highlight and can be reclaimed once no item
   // references it any more.
   _modelMaterialCount = 0;
+  opacityGroups = /* @__PURE__ */ new Map();
   constructor(modelId, onTransfer) {
     this._modelId = modelId;
     this._onTransfer = onTransfer;
@@ -33026,7 +33058,16 @@ class VirtualMaterialController {
     const material = this.getRequired(materialId);
     const highlight = highlightId ? this.getRequired(highlightId) : void 0;
     const effective = MaterialUtils.mergeHighlight(material, highlight);
-    return effective.opacity === 1 && !effective.transparent;
+    const group = highlight?.opacityGroup === void 0 ? void 0 : this.opacityGroups.get(highlight.opacityGroup);
+    const opacity = group ? (group.relative ? material.opacity : 1) * group.opacity : effective.opacity;
+    const transparent = group ? group.relative && material.transparent || opacity < 1 : effective.transparent;
+    return opacity === 1 && !transparent;
+  }
+  /** Live groups keep canonical triangle order across scalar opacity changes. */
+  shouldUseOptimizedLayout(materialId, highlightId = 0) {
+    if (highlightId && this.getRequired(highlightId).opacityGroup !== void 0)
+      return false;
+    return this.isOpaque(materialId, highlightId);
   }
   transfer(materials) {
     const result = this.deduplicateMaterials(materials);
@@ -38126,6 +38167,7 @@ class CoordinatesHelper {
   }
 }
 class HighlightHelper {
+  _opacityGroupItems = /* @__PURE__ */ new Map();
   _highlightProps = [
     "color",
     "opacity",
@@ -38248,12 +38290,22 @@ class HighlightHelper {
     const material = relative ? {
       opacityScale: opacity,
       preserveOriginalMaterial: true,
-      _explicitProps: ["opacityScale", "opacity", "transparent"]
+      _explicitProps: [
+        "opacityScale",
+        "opacity",
+        "transparent",
+        "opacityGroup"
+      ]
     } : {
       opacity,
       transparent: opacity < 1,
       preserveOriginalMaterial: true,
-      _explicitProps: ["opacity", "transparent", "opacityScale"]
+      _explicitProps: [
+        "opacity",
+        "transparent",
+        "opacityScale",
+        "opacityGroup"
+      ]
     };
     this.highlight(model, items, material);
   }
@@ -38263,10 +38315,59 @@ class HighlightHelper {
         opacity: _o,
         transparent: _t,
         opacityScale: _s,
+        opacityGroup: _g,
         ...rest
       } = current;
       return rest;
     });
+  }
+  setOpacityGroup(model, id, items, opacity, relative) {
+    model.materials.opacityGroups.set(id, { opacity, relative });
+    this.setOpacityGroupItems(model, id, items);
+  }
+  setOpacityGroupItems(model, id, items) {
+    if (!model.materials.opacityGroups.has(id)) {
+      throw new Error("Fragments: opacity group has been disposed.");
+    }
+    const next = new Set(model.properties.getItemIdsFromLocalIds(items));
+    this.releaseOpacityGroupItems(model, id, next);
+    this._opacityGroupItems.set(id, next);
+    this.highlight(model, items, {
+      opacityGroup: id,
+      preserveOriginalMaterial: true,
+      _explicitProps: [
+        "opacityGroup",
+        "opacity",
+        "opacityScale",
+        "transparent"
+      ]
+    });
+  }
+  setOpacityGroupValue(model, id, opacity) {
+    const group = model.materials.opacityGroups.get(id);
+    if (!group) throw new Error("Fragments: opacity group has been disposed.");
+    group.opacity = opacity;
+  }
+  removeOpacityGroup(model, id) {
+    this.releaseOpacityGroupItems(model, id, /* @__PURE__ */ new Set());
+    this._opacityGroupItems.delete(id);
+    model.materials.opacityGroups.delete(id);
+  }
+  releaseOpacityGroupItems(model, id, retained) {
+    const released = [];
+    for (const item of this._opacityGroupItems.get(id) ?? []) {
+      if (retained.has(item)) continue;
+      const highlight = model.materials.fetch(
+        model.itemConfig.getHighlight(item)
+      );
+      if (highlight?.opacityGroup === id) released.push(item);
+    }
+    if (released.length) {
+      this.resetOpacity(
+        model,
+        model.properties.getLocalIdsFromItemIds(released)
+      );
+    }
   }
   getFetchEvent(model, found) {
     return (itemId) => {
@@ -38950,6 +39051,18 @@ class VirtualFragmentsModel {
   }
   resetColor(items) {
     this._highlightHelper.resetColor(this, items);
+  }
+  createOpacityGroup(id, items, opacity, relative) {
+    this._highlightHelper.setOpacityGroup(this, id, items, opacity, relative);
+  }
+  setOpacityGroupItems(id, items) {
+    this._highlightHelper.setOpacityGroupItems(this, id, items);
+  }
+  setOpacityGroupValue(id, opacity) {
+    this._highlightHelper.setOpacityGroupValue(this, id, opacity);
+  }
+  removeOpacityGroup(id) {
+    this._highlightHelper.removeOpacityGroup(this, id);
   }
   setOpacity(items, opacity, relative = false) {
     this._highlightHelper.setOpacity(this, items, opacity, relative);

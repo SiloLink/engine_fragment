@@ -86,7 +86,7 @@ function createRenderLayoutHarness(opaque: boolean) {
     ]),
     faceIdBuffer: new Uint32Array([10, 20, 30, 40]),
     renderLayout: {
-      indices: new Uint16Array([2, 0, 3, 2, 3, 1]),
+      indices: new Uint16Array([2, 3, 1, 2, 0, 3]),
       oldToNewVertex: new Uint16Array([2, 0, 3, 1]),
     },
   };
@@ -97,16 +97,16 @@ function createRenderLayoutHarness(opaque: boolean) {
     vector: new Vector3(),
     matrix: new Matrix4(),
   };
-  let highlight = 0;
+  const highlights = new Map<number, number>();
   controller._materialController = {
-    isOpaque: vi.fn((_material: number, highlightId = 0) =>
+    shouldUseOptimizedLayout: vi.fn((_material: number, highlightId = 0) =>
       highlightId === 9 ? false : opaque,
     ),
   };
   controller._samples = {
-    getHighlight: vi.fn(() => highlight),
-    setHighlight: vi.fn((_sample: number, value: number) => {
-      highlight = value;
+    getHighlight: vi.fn((sample: number) => highlights.get(sample) ?? 0),
+    setHighlight: vi.fn((sample: number, value: number) => {
+      highlights.set(sample, value);
     }),
     setVisible: vi.fn(),
   };
@@ -163,7 +163,7 @@ describe("tile sample spans", () => {
     controller.constructTile(tile);
 
     expect(tile.location.toArray()).toEqual([11, 5, 0]);
-    expect([...tile.indexBuffer]).toEqual([2, 0, 3, 2, 3, 1]);
+    expect([...tile.indexBuffer]).toEqual([2, 3, 1, 2, 0, 3]);
     expect([...tile.positionBuffer]).toEqual([
       1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0,
     ]);
@@ -189,19 +189,19 @@ describe("tile sample spans", () => {
     expect(canonical.faceIdBuffer).toEqual(canonicalSnapshot.faceIds);
   });
 
-  it("keeps canonical triangle and vertex order for translucent SHELL tiles", () => {
+  it("keeps canonical triangle order over stable remapped vertices for translucent SHELL tiles", () => {
     const { controller, tile } = createRenderLayoutHarness(false);
 
     controller.constructTile(tile);
 
-    expect([...tile.indexBuffer]).toEqual([0, 1, 2, 0, 2, 3]);
+    expect([...tile.indexBuffer]).toEqual([2, 0, 3, 2, 3, 1]);
     expect([...tile.positionBuffer]).toEqual([
-      0, 0, 0, 1, 0, 0, 1, 1, 0, 0, 1, 0,
+      1, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 0,
     ]);
-    expect([...tile.faceIdBuffer]).toEqual([710, 720, 730, 740]);
+    expect([...tile.faceIdBuffer]).toEqual([720, 740, 710, 730]);
   });
 
-  it("re-realizes an existing tile when a highlight crosses the opacity boundary", () => {
+  it("updates only indices when a highlight crosses the opacity boundary", () => {
     const { controller, tile } = createRenderLayoutHarness(true);
     const process = vi.fn();
     controller._meshConnection = { process };
@@ -211,14 +211,13 @@ describe("tile sample spans", () => {
     controller._tileBySample[7] = 101;
     controller._lodBySample = [];
     controller._tilesChanged = new Set();
-    controller._tilesToRebuild = new Set();
     controller._virtualView = undefined;
     controller._sampleAmount = 1;
     controller._changedSamples = 0;
     controller.tilesUpdated = false;
 
     controller.buildNewVirtualTile(tile, 101);
-    expect([...process.mock.calls[0][0].indices]).toEqual([2, 0, 3, 2, 3, 1]);
+    expect([...process.mock.calls[0][0].indices]).toEqual([2, 3, 1, 2, 0, 3]);
     process.mockClear();
 
     controller.setSample(7, true, 9, CurrentLod.GEOMETRY);
@@ -226,8 +225,11 @@ describe("tile sample spans", () => {
 
     expect(
       process.mock.calls.map(([request]: any[]) => request.tileRequestClass),
-    ).toEqual([TileRequestClass.DELETE, TileRequestClass.CREATE]);
-    expect([...process.mock.calls[1][0].indices]).toEqual([0, 1, 2, 0, 2, 3]);
+    ).toEqual([TileRequestClass.UPDATE]);
+    expect(process.mock.calls[0][0].indexUpdates).toEqual([
+      { start: 0, indices: new Uint16Array([2, 0, 3, 2, 3, 1]) },
+    ]);
+    expect(process.mock.calls[0][0].positions).toBeUndefined();
 
     process.mockClear();
     controller.setSample(7, true, 0, CurrentLod.GEOMETRY);
@@ -235,11 +237,13 @@ describe("tile sample spans", () => {
 
     expect(
       process.mock.calls.map(([request]: any[]) => request.tileRequestClass),
-    ).toEqual([TileRequestClass.DELETE, TileRequestClass.CREATE]);
-    expect([...process.mock.calls[1][0].indices]).toEqual([2, 0, 3, 2, 3, 1]);
+    ).toEqual([TileRequestClass.UPDATE]);
+    expect(process.mock.calls[0][0].indexUpdates).toEqual([
+      { start: 0, indices: new Uint16Array([2, 3, 1, 2, 0, 3]) },
+    ]);
   });
 
-  it("re-realizes a cached geometry tile after a translucent wire LOD", () => {
+  it("updates cached geometry indices after a translucent wire LOD", () => {
     const { controller, tile } = createRenderLayoutHarness(true);
     const process = vi.fn();
     controller._meshConnection = { process };
@@ -249,14 +253,13 @@ describe("tile sample spans", () => {
     controller._tileBySample[7] = 101;
     controller._lodBySample = [];
     controller._tilesChanged = new Set();
-    controller._tilesToRebuild = new Set();
     controller._virtualView = undefined;
     controller._sampleAmount = 1;
     controller._changedSamples = 0;
     controller.tilesUpdated = false;
 
     controller.buildNewVirtualTile(tile, 101);
-    expect([...process.mock.calls[0][0].indices]).toEqual([2, 0, 3, 2, 3, 1]);
+    expect([...process.mock.calls[0][0].indices]).toEqual([2, 3, 1, 2, 0, 3]);
 
     // The sample can become translucent while represented by its WIRES tile.
     // Returning to the cached GEOMETRY tile must compare against the layout
@@ -268,8 +271,54 @@ describe("tile sample spans", () => {
 
     expect(
       process.mock.calls.map(([request]: any[]) => request.tileRequestClass),
-    ).toEqual([TileRequestClass.DELETE, TileRequestClass.CREATE]);
-    expect([...process.mock.calls[1][0].indices]).toEqual([0, 1, 2, 0, 2, 3]);
+    ).toEqual([TileRequestClass.UPDATE]);
+    expect(process.mock.calls[0][0].indexUpdates).toEqual([
+      { start: 0, indices: new Uint16Array([2, 0, 3, 2, 3, 1]) },
+    ]);
+    expect(process.mock.calls[0][0].positions).toBeUndefined();
+  });
+
+  it("patches all chunks of one sample without changing adjacent indices or pick attributes", () => {
+    const { canonical, controller, tile } = createRenderLayoutHarness(true);
+    controller.tileAppend(tile, canonical, 7, 1);
+    controller.tileAppend(tile, canonical, 8, 0);
+    tile.visibilities = new MultiBufferData<boolean>(tile.size, false);
+    tile.highlights = new MultiBufferData<number>(tile.size, 0);
+    controller.fetchSample.mockImplementation((sample: number) => ({
+      sample,
+      geometries: sample === 7 ? [canonical, canonical] : canonical,
+      transform: new Matrix4().makeTranslation(10, 5, 0),
+    }));
+    controller.itemId = (sample: number) => sample;
+    controller.constructTile(tile);
+    const full = tile.indexBuffer.slice();
+    const positions = tile.positionBuffer.slice();
+    const normals = tile.normalBuffer.slice();
+    const ids = tile.ids.slice();
+    const faceIds = tile.faceIdBuffer.slice();
+
+    controller._samples.setHighlight(7, 9);
+    controller.updateSampleIndices(tile, 7);
+    const patches = tile.indexUpdatesBySample.get(7);
+    expect(patches).toEqual([
+      { start: 0, indices: new Uint16Array([2, 0, 3, 2, 3, 1]) },
+      { start: 6, indices: new Uint16Array([6, 4, 7, 6, 7, 5]) },
+    ]);
+    const updated = full.slice();
+    for (const patch of patches) updated.set(patch.indices, patch.start);
+    expect(updated.slice(12)).toEqual(full.slice(12));
+    expect(tile.positionBuffer).toEqual(positions);
+    expect(tile.normalBuffer).toEqual(normals);
+    expect(tile.ids).toEqual(ids);
+    expect(tile.faceIdBuffer).toEqual(faceIds);
+
+    // A second change before the worker flushes supersedes the same chunks.
+    controller._samples.setHighlight(7, 0);
+    controller.updateSampleIndices(tile, 7);
+    expect(tile.indexUpdatesBySample.size).toBe(1);
+    const last = tile.indexUpdatesBySample.get(7);
+    for (const patch of last) updated.set(patch.indices, patch.start);
+    expect(updated).toEqual(full);
   });
 
   it("keeps same-opacity highlight changes on the lightweight update path", () => {
@@ -282,7 +331,6 @@ describe("tile sample spans", () => {
     controller._tileBySample[7] = 101;
     controller._lodBySample = [];
     controller._tilesChanged = new Set();
-    controller._tilesToRebuild = new Set();
     controller._virtualView = undefined;
     controller._sampleAmount = 1;
     controller._changedSamples = 0;

@@ -1,4 +1,4 @@
-import { TileRequest } from "../multithreading/protocol";
+import { TileIndexUpdate, TileRequest } from "../multithreading/protocol";
 import * as THREE from "three";
 import { MaterialManager } from "./material-manager";
 import {
@@ -286,6 +286,7 @@ export class MeshManager {
     } = request;
 
     const { geometry } = mesh;
+    this.updateIndices(geometry, request.indexUpdates);
     geometry.clearGroups();
 
     if (
@@ -306,6 +307,24 @@ export class MeshManager {
 
     const materials = this.materials.createHighlights(mesh, request);
     mesh.material = materials;
+  }
+
+  private updateIndices(
+    geometry: THREE.BufferGeometry,
+    updates: TileIndexUpdate[] | undefined,
+  ) {
+    if (!updates?.length) return;
+    const full = geometry.userData.fullIndex as Uint16Array | Uint32Array;
+    const index = geometry.index!;
+    for (const { start, indices } of updates) {
+      full.set(indices, start);
+      if (index.array !== full && !geometry.userData.compactIndex) {
+        (index.array as Uint16Array | Uint32Array).set(indices, start);
+      }
+    }
+    // Keep the attribute and fullIndex objects stable: render proxies can
+    // share either. Compaction below rebuilds its working array from full.
+    index.needsUpdate = true;
   }
 
   /**

@@ -220,6 +220,7 @@ export class LodHelper {
   private static disposeAllData(geometry: THREE.InstancedBufferGeometry) {
     delete geometry.attributes.itemFilter;
     delete geometry.attributes.itemHighlightColor;
+    delete geometry.attributes.itemHighlightOpacity;
     delete geometry.attributes.position;
     geometry.index = null;
     geometry.dispose();

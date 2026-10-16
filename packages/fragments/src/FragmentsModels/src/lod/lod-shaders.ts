@@ -112,6 +112,7 @@ export class LodShaders {
                 // collapsing to a single uniform. See #230.
                 vec3 color = mix(lodColor, vHighlightColor, vHighlight);
                 float alpha = mix(lodOpacity, vHighlightOpacity, vHighlight);
+                if (alpha <= 0.0) discard;
                 gl_FragColor = vec4(color, alpha);
                 #include <colorspace_fragment>
             }

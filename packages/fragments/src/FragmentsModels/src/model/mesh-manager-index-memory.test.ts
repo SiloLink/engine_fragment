@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import * as THREE from "three";
 import { MeshManager } from "./mesh-manager";
+import { TileIndexUpdate } from "../multithreading/protocol";
 import { CurrentLod, ObjectClass } from "./model-types";
 
 type Visibility = { position: number[]; size: number[] };
@@ -35,12 +36,19 @@ function tile(ArrayType: Uint16ArrayConstructor | Uint32ArrayConstructor) {
     },
   ]);
 
-  function update(visibilityData?: Visibility, highlighted = false) {
+  function update(
+    visibilityData?: Visibility,
+    highlighted?: boolean,
+    indexUpdates?: TileIndexUpdate[],
+  ) {
+    for (const patch of indexUpdates ?? [])
+      original.set(patch.indices, patch.start);
     manager["updateStatus"](mesh, {
       modelId: "model",
       objectClass: ObjectClass.SHELL,
       currentLod: CurrentLod.GEOMETRY,
       material: 0,
+      indexUpdates,
       tileData: {
         visibilityData,
         highlightData: highlighted ? { position: [9], size: [3] } : undefined,
@@ -189,6 +197,38 @@ describe.each([Uint16Array, Uint32Array])(
       update(undefined);
       expect(index.array).toBe(working);
       expect(index.array).toEqual(full);
+    });
+
+    test("updates full-index chunks in place across compacted and highlighted states", () => {
+      const { full, geometry, index, update, compactedOffsets } =
+        tile(ArrayType);
+      const offset = full[0];
+      const patches = [
+        { start: 3, indices: new Uint16Array([7, 8, 9]) },
+        { start: 12, indices: new Uint16Array([2, 1, 0]) },
+      ];
+      update(threeRuns);
+      const working = index.array;
+      update(threeRuns, false, patches);
+      expect(index.array).toBe(working);
+      expect(full.subarray(3, 6)).toEqual(new ArrayType(patches[0].indices));
+      expect(full.subarray(12, 15)).toEqual(new ArrayType(patches[1].indices));
+      expect(compactedOffsets().slice(6, 9)).toEqual(
+        Array.from(patches[1].indices, (value) => value - offset),
+      );
+
+      // Highlight and selection ranges still address the full tile index.
+      update(twoRuns, true);
+      expect(index.array).toBe(working);
+      expect(index.array).toEqual(full);
+      expect(geometry.userData.compactIndex).toBe(false);
+      expect(geometry.groups.at(-1)).toMatchObject({ start: 9, count: 3 });
+
+      const restore = [{ start: 3, indices: new Uint16Array([10, 11, 12]) }];
+      update(twoRuns, true, restore);
+      expect(index.array).toBe(working);
+      expect(index.array).toEqual(full);
+      expect(Array.from(index.array.slice(3, 6))).toEqual([10, 11, 12]);
     });
 
     test("preserves empty and clipped runs and restores indices for empty visibility", () => {

@@ -326,6 +326,27 @@ export class VirtualFragmentsModel {
     this._highlightHelper.resetColor(this, items);
   }
 
+  createOpacityGroup(
+    id: number,
+    items: number[],
+    opacity: number,
+    relative: boolean,
+  ) {
+    this._highlightHelper.setOpacityGroup(this, id, items, opacity, relative);
+  }
+
+  setOpacityGroupItems(id: number, items: number[]) {
+    this._highlightHelper.setOpacityGroupItems(this, id, items);
+  }
+
+  setOpacityGroupValue(id: number, opacity: number) {
+    this._highlightHelper.setOpacityGroupValue(this, id, opacity);
+  }
+
+  removeOpacityGroup(id: number) {
+    this._highlightHelper.removeOpacityGroup(this, id);
+  }
+
   setOpacity(items: number[], opacity: number, relative = false) {
     this._highlightHelper.setOpacity(this, items, opacity, relative);
   }

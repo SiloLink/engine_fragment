@@ -193,6 +193,9 @@ export class MultithreadingHelper {
     this.addRequestTileData(request, content, "visibilityData");
     const extras = ["highlightIds"];
     this.addRequestTileData(request, content, "highlightData", extras);
+    for (const update of request.indexUpdates ?? []) {
+      content.push(update.indices.buffer);
+    }
   }
 
   private static addRequestContent(id: string, request: any, content: any[]) {

@@ -116,6 +116,8 @@ export type MaterialDefinition = {
    * glass at 0.2 to 0.1, and 1 shows both as they are.
    */
   opacityScale?: number;
+  /** Internal identifier of a live opacity group. */
+  opacityGroup?: number;
   /**
    * Internal flag to preserve base material properties when applying highlights.
    * When true, only explicitly set properties (like color or opacity) are applied.

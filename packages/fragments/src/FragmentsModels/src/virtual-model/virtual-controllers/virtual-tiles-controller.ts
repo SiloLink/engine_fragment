@@ -90,7 +90,6 @@ export class VirtualTilesController {
   private readonly _modelId: string;
   private readonly _rendersTiles: boolean;
   private _shells!: VirtualShellManager;
-  private readonly _tilesToRebuild = new Set<number>();
 
   private readonly _lastView = {
     rotation: new THREE.Vector3(),
@@ -436,7 +435,6 @@ export class VirtualTilesController {
   update(time: number) {
     if (this._updateFailed) return;
     this.updateTiles(time);
-    this.rebuildTiles();
     for (const tileId of this._tilesChanged) {
       const tile = this._tiles.get(tileId) as TileData;
       this._meshConnection.process({
@@ -446,8 +444,12 @@ export class VirtualTilesController {
         objectClass: tile.objectClass,
         material: tile.materialId as number,
         tileData: this.getTileData(tile),
+        indexUpdates: tile.indexUpdatesBySample
+          ? [...tile.indexUpdatesBySample.values()].flat()
+          : undefined,
         currentLod: tile.lod as number,
       });
+      tile.indexUpdatesBySample?.clear();
     }
     this._tilesChanged.clear();
     this.notifyUpdateFinished();
@@ -805,7 +807,7 @@ export class VirtualTilesController {
     geometry: any,
     sample: any,
   ) {
-    const renderLayout = this.getRenderLayout(tile, geometry, sample.sample);
+    const renderLayout = this.getRenderLayout(tile, geometry);
     const oldToNewVertex = renderLayout?.oldToNewVertex;
     const resultPosition = tile.vertexLocation[location] * 3;
     for (let i = 0; i < geometry.positionBuffer!.length; i += 3) {
@@ -839,13 +841,14 @@ export class VirtualTilesController {
     if (tile.indexBuffer) {
       const indicesPosition = tile.indexLocation[location];
       const position = tile.vertexLocation[location];
-      const indices = renderLayout
-        ? renderLayout.indices
-        : geometry.indexBuffer!;
-      for (let i = 0; i < geometry.indexCount!; i++) {
-        const result = indices[i] + position;
-        tile.indexBuffer[i + indicesPosition] = result;
-      }
+      this.writeSampleIndices(
+        tile,
+        geometry,
+        sample.sample,
+        tile.indexBuffer,
+        indicesPosition,
+        position,
+      );
     }
 
     if (tile.faceIdBuffer && geometry.faceIdBuffer) {
@@ -905,25 +908,72 @@ export class VirtualTilesController {
     }
   }
 
-  private getRenderLayout(
+  private getRenderLayout(tile: TileData, geometry: TileData) {
+    // Vertex order stays fixed for the lifetime of a realized tile. Only its
+    // triangle order changes when a sample crosses the opacity boundary.
+    if (
+      tile.objectClass === ObjectClass.SHELL &&
+      tile.lod === CurrentLod.GEOMETRY
+    ) {
+      return geometry.renderLayout;
+    }
+    return undefined;
+  }
+
+  private writeSampleIndices(
     tile: TileData,
     geometry: TileData,
     sampleId: number,
+    target: DataBuffer,
+    offset: number,
+    vertexOffset: number,
   ) {
-    // Triangle order is observable under alpha blending. A representation may
-    // be reused by samples with different materials, so decide per tile and
-    // keep source-translucent geometry in canonical order.
-    if (!this.shouldUseRenderLayout(tile, sampleId)) {
-      return undefined;
+    const layout = this.getRenderLayout(tile, geometry);
+    const optimized = layout && this.shouldUseOptimizedLayout(tile, sampleId);
+    const indices = optimized ? layout.indices : geometry.indexBuffer!;
+    for (let i = 0; i < indices.length; i++) {
+      // Alpha blending must retain canonical triangle order, but its vertex
+      // indices address the same remapped attributes used by opaque samples.
+      const vertex =
+        layout && !optimized ? layout.oldToNewVertex[indices[i]] : indices[i];
+      target[offset + i] = vertex + vertexOffset;
     }
-    return geometry.renderLayout;
   }
 
-  private shouldUseRenderLayout(tile: TileData, sampleId: number) {
+  private updateSampleIndices(tile: TileData, sampleId: number) {
+    const sample = this.fetchSample(sampleId, tile.lod!);
+    const span = tile.sampleSpans.get(sampleId)!;
+    const updates = [];
+    const end = span.start + span.count;
+    for (let location = span.start; location < end; location++) {
+      const geometry = this.getSampleGeometries(
+        sample,
+        tile.geometriesLocation[location],
+      );
+      const indices = new Uint16Array(geometry.indexCount!);
+      this.writeSampleIndices(
+        tile,
+        geometry,
+        sampleId,
+        indices,
+        0,
+        tile.vertexLocation[location],
+      );
+      updates.push({ start: tile.indexLocation[location], indices });
+    }
+    tile.indexUpdatesBySample ??= new Map();
+    tile.indexUpdatesBySample.set(sampleId, updates);
+    tile.optimizedLayoutBySample!.set(
+      sampleId,
+      this.shouldUseOptimizedLayout(tile, sampleId),
+    );
+  }
+
+  private shouldUseOptimizedLayout(tile: TileData, sampleId: number) {
     return (
       tile.objectClass === ObjectClass.SHELL &&
       tile.lod === CurrentLod.GEOMETRY &&
-      this._materialController.isOpaque(
+      this._materialController.shouldUseOptimizedLayout(
         tile.materialId!,
         this._samples.getHighlight(sampleId),
       )
@@ -1033,7 +1083,7 @@ export class VirtualTilesController {
     tile.geometriesLocation = [];
     tile.positionCount = 0;
     tile.sampleSpans = new Map();
-    tile.renderLayoutOpaqueBySample = new Map();
+    tile.optimizedLayoutBySample = new Map();
     tile.faceIdBuffer = new Uint32Array(0);
     return tile as TileData;
   }
@@ -1118,6 +1168,7 @@ export class VirtualTilesController {
   }
 
   private buildNewVirtualTile(tile: TileData, tileId: number) {
+    tile.indexUpdatesBySample?.clear();
     this.constructTile(tile);
     this.loadTile(tileId, tile);
     tile.notVirtual = true;
@@ -1126,17 +1177,6 @@ export class VirtualTilesController {
     delete tile.normalBuffer;
     delete tile.faceIdBuffer;
     delete tile.ids;
-  }
-
-  private rebuildTiles() {
-    for (const tileId of this._tilesToRebuild) {
-      const tile = this._tiles.get(tileId);
-      if (!tile?.notVirtual) continue;
-      this.deleteGeometry(tileId);
-      this.releaseTileMemory(tile);
-      this.buildNewVirtualTile(tile, tileId);
-    }
-    this._tilesToRebuild.clear();
   }
 
   private deleteTileIfNeeded(tile: TileData, tileId: number) {
@@ -1327,6 +1367,7 @@ export class VirtualTilesController {
   }
 
   private deleteGeometry(tileId: number) {
+    this._tiles.get(tileId)?.indexUpdatesBySample?.clear();
     this._meshConnection.process({
       tileRequestClass: TileRequestClass.DELETE,
       modelId: this._modelId,
@@ -1437,18 +1478,14 @@ export class VirtualTilesController {
     const tile = this._tiles.get(tileId) as TileData;
     this.updateTileData(tile, sample, visible, highlight);
     if (tile.notVirtual) {
-      const realizedLayoutOpaque = tile.renderLayoutOpaqueBySample?.get(sample);
+      const realizedOptimizedLayout = tile.optimizedLayoutBySample?.get(sample);
       const renderLayoutClassChanged =
         tile.objectClass === ObjectClass.SHELL &&
         tile.lod === CurrentLod.GEOMETRY &&
-        realizedLayoutOpaque !== undefined &&
-        realizedLayoutOpaque !== this.shouldUseRenderLayout(tile, sample);
-      if (renderLayoutClassChanged) {
-        this._tilesChanged.delete(tileId);
-        this._tilesToRebuild.add(tileId);
-      } else if (!this._tilesToRebuild.has(tileId)) {
-        this._tilesChanged.add(tileId);
-      }
+        realizedOptimizedLayout !== undefined &&
+        realizedOptimizedLayout !== this.shouldUseOptimizedLayout(tile, sample);
+      if (renderLayoutClassChanged) this.updateSampleIndices(tile, sample);
+      this._tilesChanged.add(tileId);
       return;
     }
     this.buildNewVirtualTile(tile, tileId);
@@ -1565,13 +1602,13 @@ export class VirtualTilesController {
       tile.faceIdBuffer = new Uint32Array(tile.positionCount! / 3);
       tile.usedMemory += tile.faceIdBuffer.byteLength;
     }
-    tile.renderLayoutOpaqueBySample ??= new Map();
-    tile.renderLayoutOpaqueBySample.clear();
+    tile.optimizedLayoutBySample ??= new Map();
+    tile.optimizedLayoutBySample.clear();
     const isStart = !tile.location;
     for (const [id, span] of tile.sampleSpans) {
-      tile.renderLayoutOpaqueBySample.set(
+      tile.optimizedLayoutBySample.set(
         id,
-        this.shouldUseRenderLayout(tile, id),
+        this.shouldUseOptimizedLayout(tile, id),
       );
       const sample = this.fetchSample(id, tile.lod!);
       if (sample && sample.geometries) {

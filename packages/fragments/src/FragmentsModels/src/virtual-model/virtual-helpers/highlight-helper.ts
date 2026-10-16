@@ -3,6 +3,7 @@ import { MaterialDefinition } from "../../model/model-types";
 import { VirtualFragmentsModel } from "../virtual-fragments-model";
 
 export class HighlightHelper {
+  private readonly _opacityGroupItems = new Map<number, Set<number>>();
   private readonly _highlightProps = [
     "color",
     "opacity",
@@ -172,13 +173,23 @@ export class HighlightHelper {
         ? {
             opacityScale: opacity,
             preserveOriginalMaterial: true,
-            _explicitProps: ["opacityScale", "opacity", "transparent"],
+            _explicitProps: [
+              "opacityScale",
+              "opacity",
+              "transparent",
+              "opacityGroup",
+            ],
           }
         : {
             opacity,
             transparent: opacity < 1,
             preserveOriginalMaterial: true,
-            _explicitProps: ["opacity", "transparent", "opacityScale"],
+            _explicitProps: [
+              "opacity",
+              "transparent",
+              "opacityScale",
+              "opacityGroup",
+            ],
           }
     ) as MaterialDefinition;
     this.highlight(model, items, material);
@@ -190,10 +201,82 @@ export class HighlightHelper {
         opacity: _o,
         transparent: _t,
         opacityScale: _s,
+        opacityGroup: _g,
         ...rest
       } = current;
       return rest;
     });
+  }
+
+  setOpacityGroup(
+    model: VirtualFragmentsModel,
+    id: number,
+    items: number[],
+    opacity: number,
+    relative: boolean,
+  ) {
+    model.materials.opacityGroups.set(id, { opacity, relative });
+    this.setOpacityGroupItems(model, id, items);
+  }
+
+  setOpacityGroupItems(
+    model: VirtualFragmentsModel,
+    id: number,
+    items: number[],
+  ) {
+    if (!model.materials.opacityGroups.has(id)) {
+      throw new Error("Fragments: opacity group has been disposed.");
+    }
+    const next = new Set(model.properties.getItemIdsFromLocalIds(items));
+    this.releaseOpacityGroupItems(model, id, next);
+    this._opacityGroupItems.set(id, next);
+    this.highlight(model, items, {
+      opacityGroup: id,
+      preserveOriginalMaterial: true,
+      _explicitProps: [
+        "opacityGroup",
+        "opacity",
+        "opacityScale",
+        "transparent",
+      ],
+    } as MaterialDefinition);
+  }
+
+  setOpacityGroupValue(
+    model: VirtualFragmentsModel,
+    id: number,
+    opacity: number,
+  ) {
+    const group = model.materials.opacityGroups.get(id);
+    if (!group) throw new Error("Fragments: opacity group has been disposed.");
+    group.opacity = opacity;
+  }
+
+  removeOpacityGroup(model: VirtualFragmentsModel, id: number) {
+    this.releaseOpacityGroupItems(model, id, new Set());
+    this._opacityGroupItems.delete(id);
+    model.materials.opacityGroups.delete(id);
+  }
+
+  private releaseOpacityGroupItems(
+    model: VirtualFragmentsModel,
+    id: number,
+    retained: Set<number>,
+  ) {
+    const released: number[] = [];
+    for (const item of this._opacityGroupItems.get(id) ?? []) {
+      if (retained.has(item)) continue;
+      const highlight = model.materials.fetch(
+        model.itemConfig.getHighlight(item),
+      );
+      if (highlight?.opacityGroup === id) released.push(item);
+    }
+    if (released.length) {
+      this.resetOpacity(
+        model,
+        model.properties.getLocalIdsFromItemIds(released),
+      );
+    }
   }
 
   private getFetchEvent(

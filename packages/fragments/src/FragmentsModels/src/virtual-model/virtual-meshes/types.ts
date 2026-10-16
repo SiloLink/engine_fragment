@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { ObjectClass, CurrentLod, DataBuffer } from "../../model/model-types";
 import { MultiBufferData } from "../../utils";
+import { TileIndexUpdate } from "../../multithreading/protocol";
 
 export const normalizationValue = 2 ** 15 - 1;
 
@@ -48,7 +49,8 @@ export interface TileData extends TileBasicData {
   faceIdBuffer?: DataBuffer;
   normalBuffer?: DataBuffer;
   renderLayout?: ShellRenderLayout;
-  renderLayoutOpaqueBySample?: Map<number, boolean>;
+  optimizedLayoutBySample?: Map<number, boolean>;
+  indexUpdatesBySample?: Map<number, TileIndexUpdate[]>;
   visibilities?: MultiBufferData<boolean>;
   highlights?: MultiBufferData<number>;
 }

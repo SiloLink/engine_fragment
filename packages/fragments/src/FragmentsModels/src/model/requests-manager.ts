@@ -115,8 +115,23 @@ export class RequestsManager {
         if (
           overriddenRequest.tileRequestClass === TileRequestClass.CREATE ||
           overriddenRequest.tileRequestClass === TileRequestClass.UPDATE
-        )
+        ) {
           overriddenRequest.tileData = request.tileData;
+          if (request.indexUpdates?.length) {
+            // Each chunk has a stable full-index offset. Preserve untouched
+            // chunks while retaining only the latest order of a changed one.
+            const updates = new Map(
+              (overriddenRequest.indexUpdates ?? []).map((entry) => [
+                entry.start,
+                entry,
+              ]),
+            );
+            for (const entry of request.indexUpdates) {
+              updates.set(entry.start, entry);
+            }
+            overriddenRequest.indexUpdates = [...updates.values()];
+          }
+        }
         return true;
       }
     }
