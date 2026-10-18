@@ -10,6 +10,8 @@ export class MeshConnection {
   private _threshold = 16;
   private _connection: Connection | undefined;
   private _list: TileRequest[] = [];
+  private _pendingTransfers = new Set<Promise<unknown>>();
+  private _transferError: unknown;
 
   private get needsRefresh() {
     return this._list.length > this._threshold;
@@ -73,16 +75,29 @@ export class MeshConnection {
     }
   }
 
+  /** Wait until all requests queued so far have reached the main thread. */
+  async flush(): Promise<void> {
+    this.refresh();
+    await Promise.all(this._pendingTransfers);
+    if (this._transferError !== undefined) throw this._transferError;
+  }
+
   private refresh = () => {
-    // Defensive twin of the `process` guard: covers any request that was
-    // queued before a connection went away (#262).
-    if (!this._connection) {
-      return;
-    }
-    if (this._list.length) {
-      const current = this._list;
-      this._connection.fetchMeshCompute(this._modelId, current);
-      this._list = [];
-    }
+    if (!this._connection || !this._list.length) return;
+    const current = this._list;
+    this._list = [];
+    const transfer = Promise.resolve(
+      this._connection.fetchMeshCompute(this._modelId, current),
+    );
+    this._pendingTransfers.add(transfer);
+    // Remember failed delivery even if it precedes flush(): an eviction must
+    // never be acknowledged when its DELETE failed to reach the main thread.
+    transfer.then(
+      () => this._pendingTransfers.delete(transfer),
+      (error) => {
+        this._transferError = error;
+        this._pendingTransfers.delete(transfer);
+      },
+    );
   };
 }

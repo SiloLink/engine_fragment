@@ -29,6 +29,7 @@ const cleanup: (() => void)[] = [];
 
 function createProtocolHarness() {
   const meshes = new MeshManager(vi.fn());
+  cleanup.push(() => meshes.dispose());
   const received: any[] = [];
   const connection = new Connection(async (request) => {
     if (request.list) received.push(...request.list);
@@ -223,7 +224,9 @@ describe("view completion across the worker protocol", () => {
         renderRevision: sentFast.renderRevision,
       },
     ]);
-    expect(fast.model._finishProcessing).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(fast.model._finishProcessing).toHaveBeenCalledOnce(),
+    );
     expect(slow.model._finishProcessing).not.toHaveBeenCalled();
     expect(resolved).not.toHaveBeenCalled();
 
@@ -258,10 +261,12 @@ describe("view completion across the worker protocol", () => {
     expect(protocol.received[0].tileData.visibilityData.position).toEqual(
       new Uint32Array([3]),
     );
-    expect(protocol.meshes.requests.arePending).toBe(true);
-    expect(geometry.groups).toEqual([
-      { start: 0, count: Infinity, materialIndex: 0 },
-    ]);
+    // Arrivals are applied without waiting for the worker's final sweep.
+    await vi.waitFor(() =>
+      expect(geometry.groups).toEqual([
+        { start: 3, count: Infinity, materialIndex: 0 },
+      ]),
+    );
     expect(resolvedGroups).not.toHaveBeenCalled();
 
     await controller.update(0);

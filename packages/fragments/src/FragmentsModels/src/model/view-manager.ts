@@ -3,7 +3,7 @@ import { RefreshViewRequest, RenderView } from "../multithreading/protocol";
 import { LodMode, MultiThreadingRequestClass } from "./model-types";
 import { FragmentsModel } from "./fragments-model";
 import { MeshManager } from "./mesh-manager";
-import { CameraUtils, GPU } from "../utils";
+import { CameraUtils } from "../utils";
 
 export class ViewManager {
   /**
@@ -156,9 +156,7 @@ export class ViewManager {
 
   /**
    * Flattens everything view-relevant into a number list for cheap
-   * equality checks. `graphicThreshold` is deliberately excluded: it
-   * only budgets the worker's invisible-tile cache, so a change in it
-   * (e.g. the worker count changed) shouldn't force a full re-cull.
+   * equality checks. Cache allocation is independent of the view.
    * `undefined` fields (fov on ortho cameras, ortho size on
    * perspective ones) are encoded as NaN and compared with
    * `Object.is` semantics below.
@@ -230,8 +228,6 @@ export class ViewManager {
       orthogonalDimension: this.getOrthoSize(),
       viewSize:
         this._viewSize ?? Math.max(window.innerWidth, window.innerHeight),
-      graphicThreshold:
-        GPU.estimateCapacity() / Math.max(1, model.threads.activeThreadCount),
       graphicQuality: model.graphicsQuality * -1.5 + 2,
       clippingPlanes: this.getPlanes(),
       modelPlacement: model.object.matrixWorld,

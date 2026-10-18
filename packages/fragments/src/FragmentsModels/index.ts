@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { MeshManager, FragmentsModel } from "./src/model";
+import { GeometryCacheBudget } from "./src/model/geometry-cache-budget";
 
 import {
   VirtualModelConfig,
@@ -20,6 +21,13 @@ export interface FragmentsModelsOptions {
    * If true, creates classic (non-module) workers. Use together with `toClassicWorker()`.
    */
   classicWorker?: boolean;
+  /**
+   * Maximum bytes of inactive geometry retained for reuse across all models.
+   * Defaults to 1,000,000,000 bytes; zero disables retention. This bounds the
+   * geometry cache, not visible geometry, source data or graphics-driver memory.
+   * Capacity is shared by generated geometry size, independently of worker count.
+   */
+  maxCachedGeometryBytes?: number;
   /**
    * Effective max worker cap. Defaults to `navigator.hardwareConcurrency - 3`, floored at 2. Set explicitly for CI environments or when you know your workload.
    */
@@ -88,6 +96,12 @@ export class FragmentsModels {
    * @type {Event<FragmentsModel>}
    */
   readonly onModelLoaded = new Event<FragmentsModel>();
+
+  /**
+   * Triggered once per consumed tile slice when scene geometry changes.
+   * Hosts can request a render without waiting for a complete view update.
+   */
+  readonly onTilesUpdated = new Event<void>();
 
   /**
    * The manager that handles all loaded fragments models.
@@ -161,6 +175,7 @@ export class FragmentsModels {
   editor: Editor;
 
   private readonly _connection: FragmentsConnection;
+  private readonly _geometryCache: GeometryCacheBudget;
 
   private _progressCallbacks = new Map<
     string,
@@ -186,6 +201,9 @@ export class FragmentsModels {
    * @param options - Optional configuration.
    */
   constructor(workerURL?: string, options?: FragmentsModelsOptions) {
+    this._geometryCache = new GeometryCacheBudget(
+      options?.maxCachedGeometryBytes ?? 1_000_000_000,
+    );
     const url = workerURL ?? getBundledWorkerUrl();
     const requestEvent = this.newRequestEvent();
     const updateEvent = this.newUpdateEvent();
@@ -288,6 +306,29 @@ export class FragmentsModels {
       options.threadGroup,
     );
 
+    let disposed = false;
+    const assertActive = () => {
+      if (
+        this._isDisposed ||
+        disposed ||
+        this.models.list.get(model.modelId) !== model
+      ) {
+        throw new Error("Fragments: model disposed while loading");
+      }
+    };
+    model.onBeforeDispose.add(() => {
+      disposed = true;
+      this._geometryCache.retire(model);
+    });
+    model.onDisposed.add(() => {
+      // Disposal must still succeed if redistribution to another worker fails.
+      // The allocator conservatively retains any unconfirmed reservation.
+      this._geometryCache.remove(model).catch((error) => {
+        if (!this._isDisposed)
+          console.warn("Fragments: cache redistribution failed", error);
+      });
+    });
+
     if (options.userData) {
       model.object.userData = options.userData;
     }
@@ -317,8 +358,23 @@ export class FragmentsModels {
     try {
       this.models.list.set(model.modelId, model);
       await model._setup(buffer, raw, virtualModelConfig);
+      const cacheSize = await model.threads.invoke(
+        model.modelId,
+        "getGeometryCacheSize",
+      );
+      assertActive();
+      await this._geometryCache.register(model, cacheSize, async (bytes) => {
+        await model.threads.invoke(model.modelId, "setGeometryCacheBudget", [
+          bytes,
+        ]);
+        // Worker acknowledgement only means DELETEs reached the queue. Wait
+        // until they have been applied before transferring their reservation.
+        await this.models.whenIdle();
+      });
+      assertActive();
       if (this.settings.autoCoordinate) {
         const coordinates = await model.getCoordinates();
+        assertActive();
         if (this.baseCoordinates === null) {
           this.baseCoordinates = coordinates;
         } else {
@@ -340,10 +396,12 @@ export class FragmentsModels {
       // models list. `model.dispose()` is safe on partially-loaded models
       // because the worker-side `DELETE_MODEL` handler is now idempotent.
       try {
-        await model.dispose();
+        if (!disposed) await model.dispose();
       } catch {
-        // best-effort: if disposal fails, still ensure main-thread cleanup
-        this.models.list.delete(model.modelId);
+        // Never remove a newer model loaded under the same public ID.
+        if (this.models.list.get(model.modelId) === model) {
+          this.models.list.delete(model.modelId);
+        }
       }
       throw e;
     } finally {
@@ -365,6 +423,8 @@ export class FragmentsModels {
    */
   async dispose() {
     this._isDisposed = true;
+    this._geometryCache.dispose();
+    this.models.dispose();
     if (this._autoRedrawInterval) {
       clearTimeout(this._autoRedrawInterval);
       this._autoRedrawInterval = null;
@@ -385,6 +445,7 @@ export class FragmentsModels {
     }
     await Promise.all(promises);
     this.onModelLoaded.reset();
+    this.onTilesUpdated.reset();
   }
 
   /**
@@ -530,6 +591,7 @@ export class FragmentsModels {
     return () => {
       // A tile batch can land after dispose(); it must not re-arm the loop.
       if (this._isDisposed) return;
+      this.onTilesUpdated.trigger();
       // This limits the maximum update rate to the maxUpdateRate setting
       if (this._autoRedrawInterval) {
         clearTimeout(this._autoRedrawInterval);
@@ -545,7 +607,7 @@ export class FragmentsModels {
 
   private newRequestEvent() {
     return (request: ThreadHandler) => {
-      this.manageRequest(request);
+      return this.manageRequest(request);
     };
   }
 }

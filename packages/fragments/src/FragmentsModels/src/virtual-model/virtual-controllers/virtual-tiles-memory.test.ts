@@ -7,11 +7,9 @@ import { VirtualFragmentsModel } from "../virtual-fragments-model";
 import { VirtualTilesController } from "./virtual-tiles-controller";
 import { CameraUtils } from "../../utils/geometry/camera-utils";
 
-// Side defect of #303: the per-worker tile memory counter is incremented on
-// tile load and decremented only on eviction, so disposing a model left its
-// realized tiles counted forever. Load, dispose and reload in one worker and
-// the cache drifts toward overflow, which makes eviction (and the lost
-// outlines of #303) strictly more frequent.
+// Resident accounting is diagnostic; inactive cache quotas are per model.
+// Disposal must remove only this model's bytes when a worker owns more than
+// one model, and repeated disposal must not subtract them a second time.
 
 const FRAG = fileURLToPath(
   new URL(
@@ -40,7 +38,6 @@ const loadRealized = async () => {
     fov: 60,
     orthogonalDimension: 0.01,
     viewSize: 10000,
-    graphicThreshold: Number.MAX_SAFE_INTEGER,
     graphicQuality: 0.5,
     clippingPlanes: [],
     modelPlacement: new THREE.Matrix4(),
@@ -54,10 +51,10 @@ const loadRealized = async () => {
 // machine the 5 s default is too tight and the timeout says nothing about
 // the counter.
 describe(
-  "VirtualTilesController tile memory (issue #303, side defect B)",
+  "VirtualTilesController resident tile accounting",
   { timeout: 30000 },
   () => {
-    test("disposing a model returns its realized tile memory to the worker budget", async () => {
+    test("disposing a model removes its realized tile memory from the diagnostic counter", async () => {
       const start = consumed();
       const model = await loadRealized();
       const loaded = consumed();

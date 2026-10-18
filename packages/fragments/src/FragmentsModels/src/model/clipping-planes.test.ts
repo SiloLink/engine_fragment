@@ -44,7 +44,7 @@ const loadWith = async (options: Record<string, unknown>) => {
     fetch: async (request: any) => {
       if (request.view) views.push(request.view);
     },
-    invoke: async () => {},
+    invoke: async () => 0,
     delete: async () => {},
   };
   vi.spyOn(FragmentsModel.prototype, "_setup").mockImplementation(

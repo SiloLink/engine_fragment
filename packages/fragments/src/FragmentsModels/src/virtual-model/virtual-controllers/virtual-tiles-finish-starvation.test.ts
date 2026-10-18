@@ -79,7 +79,6 @@ const setup = async () => {
       cameraPosition: position,
       fov: 60,
       viewSize: 1512,
-      graphicThreshold: 1e9,
       meshThreshold: 1e9,
       graphicQuality: 2,
       clippingPlanes: [],

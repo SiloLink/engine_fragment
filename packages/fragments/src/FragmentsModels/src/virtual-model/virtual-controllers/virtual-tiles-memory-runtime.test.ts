@@ -9,6 +9,7 @@ import { MultithreadingHelper } from "../../multithreading/multithreading-helper
 import { MultiBufferData } from "../../utils/misc/multi-buffer-data";
 import { ItemConfigController } from "./item-config-controller";
 import { VirtualTilesController } from "./virtual-tiles-controller";
+import { TileCache } from "./tile-cache";
 
 const graphicsMemory = VirtualTilesController as any;
 
@@ -64,9 +65,16 @@ function createModel(modelId: string) {
         highlight !== 9,
     },
     _samples: samples,
-    _virtualView: { graphicThreshold: Infinity },
+    _virtualView: {},
     _virtualMeshes: new Map(),
     _tiles: new Map(),
+    _tileIds: new Map(),
+    _cache: new TileCache<any>((tile) => {
+      const tileId = controller._tileIds.get(tile);
+      controller._tilesChanged.delete(tileId);
+      controller.deleteGeometry(tileId);
+      controller.releaseTileMemory(tile);
+    }),
     _tilesChanged: new Set(),
     _meshConnection: {
       process(request: any) {
@@ -163,7 +171,7 @@ describe("resident tile memory", () => {
     first.realize(1);
     second.realize(1);
     const before = graphicsMemory._graphicMemoryConsumed;
-    first.controller._virtualView.graphicThreshold = 0;
+    first.controller.setCacheBudget(0);
 
     first.controller.makeInvisibleFromTile(1, 0);
     expect(firstTile.notVirtual).toBe(false);

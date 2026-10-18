@@ -6,6 +6,7 @@ import {
   TileRequestClass,
 } from "../../model/model-types";
 import { MultiBufferData } from "../../utils";
+import { TileCache } from "../virtual-controllers/tile-cache";
 import { VirtualTilesController } from "../virtual-controllers/virtual-tiles-controller";
 
 function createGeometry(offset: number) {
@@ -35,6 +36,8 @@ function createTileHarness() {
   const second = createGeometry(10);
   const adjacent = createGeometry(20);
   const controller = Object.create(VirtualTilesController.prototype) as any;
+  controller._cache = new TileCache(() => {});
+  controller._tileIds = new Map();
 
   controller._temp = {
     vector: new Vector3(),
@@ -91,6 +94,8 @@ function createRenderLayoutHarness(opaque: boolean) {
     },
   };
   const controller = Object.create(VirtualTilesController.prototype) as any;
+  controller._cache = new TileCache(() => {});
+  controller._tileIds = new Map();
   const transform = new Matrix4().makeTranslation(10, 5, 0);
 
   controller._temp = {

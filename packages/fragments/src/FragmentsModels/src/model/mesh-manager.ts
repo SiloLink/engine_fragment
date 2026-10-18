@@ -1,5 +1,5 @@
-import { TileIndexUpdate, TileRequest } from "../multithreading/protocol";
 import * as THREE from "three";
+import { TileIndexUpdate, TileRequest } from "../multithreading/protocol";
 import { MaterialManager } from "./material-manager";
 import {
   TileRequestClass,
@@ -12,7 +12,6 @@ import { DataMap } from "../../../Utils";
 import { RequestsManager } from "./requests-manager";
 import { LODManager } from "./lod-manager";
 import { LODMesh } from "../lod";
-import { MultithreadingHelper } from "../multithreading/multithreading-helper";
 import { FragmentsMultiDrawMesh } from "./fragments-multi-draw-mesh";
 import { ModelViewUpdateError } from "./model-view-error";
 
@@ -70,15 +69,48 @@ export class MeshManager {
   private _nextViewRevision = 0;
   private readonly _views = new WeakMap<FragmentsModel, ViewCompletion>();
   private _fenceWaiters: ViewFence[] = [];
+  private _idleWaiters: {
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }[] = [];
+  private readonly _modelInstances = new Map<string, FragmentsModel>();
+  private readonly _applicationFailures = new Map<FragmentsModel, unknown>();
+  private _updateTimer: ReturnType<typeof setTimeout> | null = null;
+  private _updating = false;
+  private _disposed = false;
 
   private _onUpdate: () => void;
 
   constructor(onUpdate: () => void) {
     this._onUpdate = onUpdate;
-    this.requests.onFinish = () => this.drainAll();
-    this.list.onItemDeleted.add(() => this.settleViewFences());
-    this.list.onItemUpdated.add(() => this.settleViewFences());
-    this.list.onCleared.add(() => this.settleViewFences());
+    this.requests.onPending = () => this.scheduleUpdate();
+    this.list.onItemSet.add(({ key, value }) => {
+      this._modelInstances.set(key, value);
+    });
+    this.list.onItemDeleted.add((key) => {
+      const model = this._modelInstances.get(key);
+      if (model) this._applicationFailures.delete(model);
+      this._modelInstances.delete(key);
+      this.removeRequests(key);
+      this.settleViewFences();
+    });
+    this.list.onItemUpdated.add(({ key, value }) => {
+      const previous = this._modelInstances.get(key);
+      if (previous !== value) {
+        if (previous) this._applicationFailures.delete(previous);
+        this.removeRequests(key);
+      }
+      this._modelInstances.set(key, value);
+      this.settleViewFences();
+    });
+    this.list.onCleared.add(() => {
+      this._modelInstances.clear();
+      this._applicationFailures.clear();
+      this.requests.clear();
+      this.cancelUpdate();
+      this.settleViewFences();
+      this.settleIdleWaiters();
+    });
   }
 
   beginViewUpdate(model: FragmentsModel) {
@@ -123,14 +155,19 @@ export class MeshManager {
     }
     await new Promise<void>((resolve, reject) => {
       this._fenceWaiters.push({ targets, resolve, reject });
-      this.drainAll();
+      this.scheduleUpdate();
       this.settleViewFences();
     });
   }
 
   private finishView(model: FragmentsModel, revision: number) {
     const state = this._views.get(model);
-    if (!state || !(revision >= state.firstRevision)) return;
+    if (
+      !state ||
+      !(revision >= state.firstRevision) ||
+      (state.failure && state.failure.revision >= revision)
+    )
+      return;
     state.completed = Math.max(state.completed, revision);
     if (revision >= state.requested) model._finishProcessing();
     this.settleViewFences();
@@ -140,7 +177,7 @@ export class MeshManager {
     this._fenceWaiters = this._fenceWaiters.filter((waiter) => {
       let pending = false;
       for (const { model, revision } of waiter.targets) {
-        if (this.list.get(model.modelId) !== model) {
+        if (this._disposed || this.list.get(model.modelId) !== model) {
           waiter.reject(
             new ModelViewUpdateError("model-removed", model.modelId, revision),
           );
@@ -160,30 +197,125 @@ export class MeshManager {
   }
 
   /**
-   * Process every queued tile request without the per-frame
-   * `updateThreshold` cap. Used by force-flush paths where the
-   * caller is explicitly waiting for everything to settle —
-   * spreading the work across many frames there would just delay
-   * the visual.
+   * Applies one budgeted slice. Worker arrivals schedule this independently
+   * of camera updates, including while a forced update awaits its FINISH.
+   * Each task yields to the browser; an empty queue schedules no further work.
    */
-  private drainAll() {
-    while (this.requests.arePending) {
-      const request = this.requests.list.shift();
-      if (!request) continue;
-      this.processTileRequest(request);
-      if (!MultithreadingHelper.isFinishRequest(request)) this._onUpdate();
+  update() {
+    if (this._disposed || this._updating) return;
+    this.cancelUpdate();
+    this._updating = true;
+    const start = performance.now();
+    let changed = false;
+    try {
+      while (this.requests.arePending && !this._disposed) {
+        const request = this.requests.list.shift()!;
+        try {
+          changed = this.processTileRequest(request) || changed;
+        } catch (cause) {
+          const model = this.list.get(request.modelId);
+          const state = model && this._views.get(model);
+          // A failed DELETE can be lost from the worker's next delta. Retain
+          // the failure until this model lifetime is removed; queue emptiness
+          // alone must never acknowledge that its geometry was released.
+          if (model) this._applicationFailures.set(model, cause);
+          this.removeRequests(request.modelId);
+          for (const waiter of this._idleWaiters.splice(0))
+            waiter.reject(cause);
+          if (model && state) {
+            this.failViewUpdate(model, state.requested, cause);
+          } else {
+            throw cause;
+          }
+        }
+        if (performance.now() - start >= this.updateThreshold) break;
+      }
+    } finally {
+      this._updating = false;
+      this.scheduleUpdate();
+      if (changed && !this._disposed) this._onUpdate();
+      this.settleIdleWaiters();
     }
   }
 
-  update() {
-    const start = performance.now();
-    while (this.requests.arePending) {
-      const request = this.requests.list.shift();
-      if (!request) continue;
-      this.processTileRequest(request);
-      if (!MultithreadingHelper.isFinishRequest(request)) this._onUpdate();
-      if (performance.now() - start > this.updateThreshold) return;
+  /**
+   * Waits for queued changes to be applied without requesting another view.
+   * Producers must flush their messages before calling this; future arrivals
+   * after the queue becomes idle are not part of this wait.
+   */
+  whenIdle(): Promise<void> {
+    if (this._disposed) {
+      return Promise.reject(new Error("Fragments: mesh manager is disposed."));
     }
+    const failure = this._applicationFailures.values().next();
+    if (!failure.done) return Promise.reject(failure.value);
+    if (!this._updating && !this.requests.arePending) return Promise.resolve();
+    return new Promise<void>((resolve, reject) => {
+      this._idleWaiters.push({ resolve, reject });
+      this.scheduleUpdate();
+    });
+  }
+
+  private settleIdleWaiters() {
+    const failure = this._applicationFailures.values().next();
+    if (!failure.done) {
+      for (const waiter of this._idleWaiters.splice(0))
+        waiter.reject(failure.value);
+      return;
+    }
+    if (this._updating || this.requests.arePending) return;
+    for (const waiter of this._idleWaiters.splice(0)) waiter.resolve();
+  }
+
+  /** Stops queue consumption and rejects waits before worker teardown. */
+  dispose() {
+    this._disposed = true;
+    this.cancelUpdate();
+    this.requests.dispose();
+    this._modelInstances.clear();
+    this._applicationFailures.clear();
+    const error = new Error("Fragments: mesh manager is disposed.");
+    for (const waiter of this._idleWaiters.splice(0)) waiter.reject(error);
+    for (const waiter of this._fenceWaiters.splice(0)) {
+      const target = waiter.targets[0];
+      if (target) {
+        waiter.reject(
+          new ModelViewUpdateError(
+            "model-removed",
+            target.model.modelId,
+            target.revision,
+          ),
+        );
+      } else {
+        waiter.resolve();
+      }
+    }
+  }
+
+  private scheduleUpdate() {
+    if (
+      this._disposed ||
+      this._updating ||
+      this._updateTimer !== null ||
+      !this.requests.arePending
+    )
+      return;
+    this._updateTimer = setTimeout(() => {
+      this._updateTimer = null;
+      this.update();
+    }, 0);
+  }
+
+  private cancelUpdate() {
+    if (this._updateTimer === null) return;
+    clearTimeout(this._updateTimer);
+    this._updateTimer = null;
+  }
+
+  private removeRequests(modelId: string) {
+    this.requests.clear(modelId);
+    if (!this.requests.arePending) this.cancelUpdate();
+    this.settleIdleWaiters();
   }
 
   private setTileData(mesh: BIMMesh, request: any) {
@@ -196,24 +328,37 @@ export class MeshManager {
   private processTileRequest(request: TileRequest) {
     const { tileRequestClass, modelId } = request;
     const model = this.list.get(modelId);
-    if (!model) return;
+    if (!model) return false;
+    const state = this._views.get(model);
+    if (
+      tileRequestClass !== TileRequestClass.FINISH &&
+      state?.failure &&
+      state.failure.revision >= state.requested
+    )
+      return false;
     if (tileRequestClass === TileRequestClass.CREATE) {
-      if (request.objectClass === undefined) return;
+      if (request.objectClass === undefined) return false;
       const tile = this.create(request);
       this.setTileData(tile, request);
       const uniqueIds = this.extractUniqueItemIds(request.itemIds);
       tile.userData.itemIds = uniqueIds;
       this.trackVisibleItems(model, uniqueIds, true);
       model.tiles.set(tile.userData.tileId, tile);
-    } else if (tileRequestClass === TileRequestClass.DELETE) {
+      return true;
+    }
+    if (tileRequestClass === TileRequestClass.DELETE) {
       const tile = model.tiles.get(request.tileId);
       if (tile?.userData.itemIds) {
         this.trackVisibleItems(model, tile.userData.itemIds, false);
       }
-      model.tiles.delete(request.tileId);
-    } else if (tileRequestClass === TileRequestClass.UPDATE) {
+      return model.tiles.delete(request.tileId);
+    }
+    if (tileRequestClass === TileRequestClass.UPDATE) {
       const tileObject = model.tiles.get(request.tileId);
-      if (tileObject) this.updateStatus(tileObject, request);
+      if (tileObject) {
+        this.updateStatus(tileObject, request);
+        return true;
+      }
     } else if (tileRequestClass === TileRequestClass.FINISH) {
       if (request.error === undefined) {
         this.finishView(model, request.renderRevision);
@@ -221,6 +366,7 @@ export class MeshManager {
         this.failViewUpdate(model, request.renderRevision, request.error);
       }
     }
+    return false;
   }
 
   private extractUniqueItemIds(itemIds: any): Set<number> {

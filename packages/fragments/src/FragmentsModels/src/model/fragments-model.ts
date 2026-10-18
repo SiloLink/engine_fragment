@@ -80,6 +80,12 @@ export class FragmentsModel implements IFragmentsModel<true> {
    */
   readonly onViewUpdated = new Event<FragmentsModel>();
 
+  /** Triggered before the worker and model registry are released. */
+  readonly onBeforeDispose = new Event<FragmentsModel>();
+
+  /** Triggered after geometry is released, including deferred visual disposal. */
+  readonly onDisposed = new Event<FragmentsModel>();
+
   /**
    * Event triggered when the requested view fails, so that a host waiting
    * for the model's first view can stop waiting. The error names the model
@@ -270,19 +276,28 @@ export class FragmentsModel implements IFragmentsModel<true> {
    *   loaded model without a blank frame.
    */
   async dispose(options?: { keepInScene?: boolean }) {
+    this.onBeforeDispose.trigger(this);
+    this.onBeforeDispose.reset();
     for (const group of this._opacityGroups) group.invalidate(false);
     this._opacityGroups.clear();
     this._isLoaded = false;
     this.visibleItems.clear();
     this._itemLocalIds = new Uint32Array();
     this.onViewUpdated.reset();
-    await this._dataManager.dispose(
-      this,
-      this._meshManager,
-      this._alignmentsManager,
-      this._gridsManager,
-      options,
-    );
+    try {
+      await this._dataManager.dispose(
+        this,
+        this._meshManager,
+        this._alignmentsManager,
+        this._gridsManager,
+        options,
+      );
+    } finally {
+      if (!options?.keepInScene) {
+        this.onDisposed.trigger(this);
+        this.onDisposed.reset();
+      }
+    }
   }
 
   /**
@@ -311,6 +326,8 @@ export class FragmentsModel implements IFragmentsModel<true> {
 
     this._alignmentsManager.dispose();
     this._gridsManager.dispose();
+    this.onDisposed.trigger(this);
+    this.onDisposed.reset();
   }
 
   /**

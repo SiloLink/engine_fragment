@@ -35,7 +35,7 @@ describe("model view completion", () => {
     await failed;
   });
 
-  it("reports a failed latest view to its model, but not a stale one", () => {
+  it("reports a failed latest view to its model, but not a stale one", async () => {
     const meshes = new MeshManager(() => {});
     const model = addModel(meshes, "failing");
     const stale = meshes.beginViewUpdate(model);
@@ -52,7 +52,9 @@ describe("model view completion", () => {
         error: "sample failed",
       } as any,
     ]);
-    expect(model._failProcessing).toHaveBeenCalledOnce();
+    await vi.waitFor(() =>
+      expect(model._failProcessing).toHaveBeenCalledOnce(),
+    );
     expect(model._failProcessing).toHaveBeenCalledWith(
       expect.objectContaining({
         reason: "view-failed",

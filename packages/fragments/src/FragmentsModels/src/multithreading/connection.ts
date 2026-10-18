@@ -28,7 +28,7 @@ export class Connection {
     const helper = MultithreadingHelper;
     const input = helper.getMeshComputeRequest(modelId, list);
     const content = helper.getRequestContent(input);
-    this.fetch(input, content);
+    return this.fetch(input, content);
   }
 
   fetch(input: any, content?: any[]) {

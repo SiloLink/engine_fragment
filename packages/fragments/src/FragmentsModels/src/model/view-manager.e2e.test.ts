@@ -61,7 +61,6 @@ const viewFor = (cameraFrustum: THREE.Frustum) => ({
   // frustum culling is the only thing under test.
   orthogonalDimension: 0.01,
   viewSize: 10000,
-  graphicThreshold: Number.MAX_SAFE_INTEGER,
   graphicQuality: 0.5,
   clippingPlanes: [],
   modelPlacement: new THREE.Matrix4(),

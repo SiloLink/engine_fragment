@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { TileRequestClass } from "./model-types";
 import { RequestsManager } from "./requests-manager";
 
@@ -89,5 +89,53 @@ describe("queued tile requests", () => {
       create(1, "a-new", "a"),
       update(1, "b-new", "b"),
     ]);
+  });
+});
+
+describe("queued completion boundaries", () => {
+  const finish = (modelId = "model") => ({
+    tileRequestClass: TileRequestClass.FINISH as const,
+    modelId,
+    renderRevision: 1,
+  });
+
+  it.each([create, update, remove])(
+    "does not coalesce a later change across its model's FINISH",
+    (later) => {
+      const first = create(1, "first");
+      const completion = finish();
+      const next = later === remove ? remove(1) : later(1, "later");
+      const manager = queue(first, completion, next);
+      expect(manager.list).toEqual([first, completion, next]);
+      expect(first.tileData).toBe("first");
+    },
+  );
+
+  it("can coalesce across another model's completion", () => {
+    const manager = queue(
+      create(1, "first"),
+      finish("other"),
+      update(1, "last"),
+    );
+    expect(manager.list).toEqual([create(1, "last"), finish("other")]);
+  });
+
+  it("notifies once after the whole batch has been enqueued", () => {
+    const manager = new RequestsManager();
+    const batches: any[][] = [];
+    manager.onPending = () => batches.push([...manager.list]);
+    const batch = [create(1, "first"), finish(), create(2, "last")];
+    manager.add(batch as any);
+    expect(batches).toEqual([batch]);
+  });
+
+  it("drops late batches after disposal", () => {
+    const manager = queue(create(1, "first"));
+    const pending = vi.fn();
+    manager.onPending = pending;
+    manager.dispose();
+    manager.add([finish()]);
+    expect(manager.list).toEqual([]);
+    expect(pending).not.toHaveBeenCalled();
   });
 });

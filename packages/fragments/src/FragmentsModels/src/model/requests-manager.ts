@@ -21,14 +21,13 @@ export class RequestsManager {
     return this.list.length > 0;
   }
 
-  /**
-   * Callback function to be invoked when a request with
-   * `TileRequestClass.FINISH` is added, so its preceding tile changes
-   * can be drained before the corresponding view is marked complete.
-   */
-  onFinish: () => void = () => {};
+  /** Called once after an incoming batch has been enqueued. */
+  onPending: () => void = () => {};
+
+  private _disposed = false;
 
   async handleRequest(meshes: MeshManager, request: any) {
+    if (this._disposed) return;
     if (request.class === MultiThreadingRequestClass.RECOMPUTE_MESHES) {
       this.add(request.list);
       request.list = undefined;
@@ -43,18 +42,31 @@ export class RequestsManager {
   }
 
   /**
-   * Adds an array of requests to the list. If a request with `TileRequestClass.FINISH` is added,
-   * the `onFinishRequest` callback is invoked.
+   * Adds an entire batch before notifying the consumer. FINISH is an ordered
+   * queue entry, not a request to synchronously flush preceding changes.
    *
    * @param requests - Array of requests to be added.
    */
   add(requests: TileRequest[]) {
+    if (this._disposed) return;
     for (const request of requests) {
       if (!this.insert(request)) this.list.push(request);
-      if (request.tileRequestClass === TileRequestClass.FINISH) {
-        this.onFinish();
-      }
     }
+    if (this.arePending) this.onPending();
+  }
+
+  /** Discards queued changes belonging to a removed or failed model. */
+  clear(modelId?: string) {
+    this.list =
+      modelId === undefined
+        ? []
+        : this.list.filter((request) => request.modelId !== modelId);
+  }
+
+  dispose() {
+    this._disposed = true;
+    this.clear();
+    this.onPending = () => {};
   }
 
   /**
@@ -82,8 +94,10 @@ export class RequestsManager {
     const { modelId, tileId, tileRequestClass } = request;
 
     if (tileRequestClass === TileRequestClass.DELETE) {
+      const boundary = this.findLastFinish(modelId);
       const list = this.list.filter(
-        (request) =>
+        (request, index) =>
+          index <= boundary ||
           !(
             (request.tileRequestClass === TileRequestClass.CREATE ||
               request.tileRequestClass === TileRequestClass.DELETE) &&
@@ -95,8 +109,10 @@ export class RequestsManager {
     }
 
     if (tileRequestClass === TileRequestClass.CREATE) {
+      const boundary = this.findLastFinish(modelId);
       const list = this.list.filter(
-        (request) =>
+        (request, index) =>
+          index <= boundary ||
           !(
             request.tileRequestClass === TileRequestClass.CREATE &&
             request.modelId === modelId &&
@@ -139,9 +155,26 @@ export class RequestsManager {
     return false;
   }
 
+  private findLastFinish(modelId: string) {
+    for (let i = this.list.length - 1; i >= 0; i--) {
+      const request = this.list[i];
+      if (
+        request.modelId === modelId &&
+        request.tileRequestClass === TileRequestClass.FINISH
+      )
+        return i;
+    }
+    return -1;
+  }
+
   private findLatestTileRequest(modelId: string, tileId: number) {
     for (let i = this.list.length - 1; i >= 0; i--) {
       const request = this.list[i];
+      if (
+        request.modelId === modelId &&
+        request.tileRequestClass === TileRequestClass.FINISH
+      )
+        return undefined;
       if (
         request.tileRequestClass !== TileRequestClass.FINISH &&
         request.modelId === modelId &&

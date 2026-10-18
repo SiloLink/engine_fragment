@@ -7,7 +7,6 @@ import {
   MultiThreadingRequestClass,
   TileRequestClass,
 } from "./src/model/model-types";
-import { GPU } from "./src/utils";
 import { VirtualTilesController } from "./src/virtual-model/virtual-controllers/virtual-tiles-controller";
 
 describe("SiloLink Fragments runtime contracts", () => {
@@ -104,7 +103,6 @@ describe("SiloLink Fragments runtime contracts", () => {
 
   it("uses the load view size from the first view after loading", async () => {
     vi.stubGlobal("window", { innerWidth: 1920, innerHeight: 1080 });
-    vi.spyOn(GPU, "estimateCapacity").mockReturnValue(1);
     const setup = vi
       .spyOn(FragmentsModel.prototype, "_setup")
       .mockResolvedValue(undefined);
@@ -112,7 +110,7 @@ describe("SiloLink Fragments runtime contracts", () => {
     fragments.settings.autoCoordinate = false;
     const fetch = vi
       .spyOn((fragments as any)._connection, "fetch")
-      .mockResolvedValue({});
+      .mockResolvedValue({ result: 0 });
     const camera = new THREE.PerspectiveCamera();
     const bytes = new Uint8Array([1]);
 
@@ -137,13 +135,12 @@ describe("SiloLink Fragments runtime contracts", () => {
 
   it("keeps a model frozen after loading when asked, until the caller lets it run", async () => {
     vi.stubGlobal("window", { innerWidth: 1920, innerHeight: 1080 });
-    vi.spyOn(GPU, "estimateCapacity").mockReturnValue(1);
     vi.spyOn(FragmentsModel.prototype, "_setup").mockResolvedValue(undefined);
     const fragments = new FragmentsModels("worker-url");
     fragments.settings.autoCoordinate = false;
     const fetch = vi
       .spyOn((fragments as any)._connection, "fetch")
-      .mockResolvedValue({});
+      .mockResolvedValue({ result: 0 });
     const camera = new THREE.PerspectiveCamera();
     const views = () =>
       fetch.mock.calls

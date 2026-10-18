@@ -59,7 +59,6 @@ const viewFor = (cameraFrustum: THREE.Frustum) => ({
   fov: 60,
   orthogonalDimension: 0.01,
   viewSize: 10000,
-  graphicThreshold: Number.MAX_SAFE_INTEGER,
   graphicQuality: 0.5,
   clippingPlanes: [],
   modelPlacement: new THREE.Matrix4(),

@@ -143,7 +143,6 @@ function createView(distance: number, renderRevision: number) {
     cameraPosition: camera.position.clone(),
     fov: camera.fov,
     viewSize: 1000,
-    graphicThreshold: Infinity,
     graphicQuality: 0.5,
     clippingPlanes: [],
     renderRevision,

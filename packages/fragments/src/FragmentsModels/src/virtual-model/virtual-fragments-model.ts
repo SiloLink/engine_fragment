@@ -862,6 +862,15 @@ export class VirtualFragmentsModel {
     return EditUtils.getItemSnapData(this, itemId);
   }
 
+  getGeometryCacheSize() {
+    return this.tiles.geometryCacheSize;
+  }
+
+  async setGeometryCacheBudget(bytes: number) {
+    this.tiles.setCacheBudget(bytes);
+    await this.tiles.flushTileRequests();
+  }
+
   setLodMode(lodMode: LodMode) {
     this.tiles.setLodMode(lodMode);
   }

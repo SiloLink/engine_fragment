@@ -13842,7 +13842,7 @@ class MultithreadingHelper {
     return ["positions", "indices", "normals", "itemIds", "faceIds"];
   }
 }
-const FRAGMENTS_PROTOCOL_VERSION = 2;
+const FRAGMENTS_PROTOCOL_VERSION = 3;
 const PROTOCOL_HANDSHAKE_TIMEOUT = 1e4;
 class Connection {
   _handlers = new ConnectionHandlers();
@@ -13856,7 +13856,7 @@ class Connection {
     const helper = MultithreadingHelper;
     const input = helper.getMeshComputeRequest(modelId, list);
     const content = helper.getRequestContent(input);
-    this.fetch(input, content);
+    return this.fetch(input, content);
   }
   fetch(input, content) {
     this._handlers.setupInput(input);
@@ -29522,6 +29522,8 @@ class MeshConnection {
   _threshold = 16;
   _connection;
   _list = [];
+  _pendingTransfers = /* @__PURE__ */ new Set();
+  _transferError;
   get needsRefresh() {
     return this._list.length > this._threshold;
   }
@@ -29558,15 +29560,27 @@ class MeshConnection {
       this.refresh();
     }
   }
+  /** Wait until all requests queued so far have reached the main thread. */
+  async flush() {
+    this.refresh();
+    await Promise.all(this._pendingTransfers);
+    if (this._transferError !== void 0) throw this._transferError;
+  }
   refresh = () => {
-    if (!this._connection) {
-      return;
-    }
-    if (this._list.length) {
-      const current = this._list;
-      this._connection.fetchMeshCompute(this._modelId, current);
-      this._list = [];
-    }
+    if (!this._connection || !this._list.length) return;
+    const current = this._list;
+    this._list = [];
+    const transfer = Promise.resolve(
+      this._connection.fetchMeshCompute(this._modelId, current)
+    );
+    this._pendingTransfers.add(transfer);
+    transfer.then(
+      () => this._pendingTransfers.delete(transfer),
+      (error2) => {
+        this._transferError = error2;
+        this._pendingTransfers.delete(transfer);
+      }
+    );
   };
 }
 class RaycastController {
@@ -31640,6 +31654,59 @@ function encodeFaceColors(faceIds) {
   }
   return colors;
 }
+class TileCache {
+  constructor(evict) {
+    this.evict = evict;
+  }
+  evict;
+  _entries = /* @__PURE__ */ new Map();
+  _budget = 0;
+  _bytes = 0;
+  get bytes() {
+    return this._bytes;
+  }
+  setBudget(bytes) {
+    TileCache.validateBytes(bytes);
+    this._budget = bytes;
+    this.trim();
+  }
+  retain(entry, bytes) {
+    TileCache.validateBytes(bytes);
+    if (this._entries.has(entry)) return;
+    if (bytes > this._budget || this._budget === 0) {
+      this.evict(entry);
+      return;
+    }
+    this.trim(this._budget - bytes);
+    this._entries.set(entry, bytes);
+    this._bytes += bytes;
+  }
+  remove(entry) {
+    const bytes = this._entries.get(entry);
+    if (bytes === void 0) return;
+    this._entries.delete(entry);
+    this._bytes -= bytes;
+  }
+  /** For disposal: forget entries without sending individual evictions. */
+  clear() {
+    this._entries.clear();
+    this._bytes = 0;
+  }
+  trim(limit = this._budget) {
+    while (this._bytes > limit) {
+      const entry = this._entries.keys().next().value;
+      this.remove(entry);
+      this.evict(entry);
+    }
+  }
+  static validateBytes(bytes) {
+    if (!Number.isFinite(bytes) || bytes < 0) {
+      throw new RangeError(
+        "Fragments: tile cache bytes must be finite and non-negative."
+      );
+    }
+  }
+}
 class VirtualTilesController {
   meshes;
   tilesUpdated = false;
@@ -31654,6 +31721,13 @@ class VirtualTilesController {
   _tileIdGenerator = new CRC();
   _tiles = /* @__PURE__ */ new Map();
   _tilesChanged = /* @__PURE__ */ new Set();
+  _tileIds = /* @__PURE__ */ new Map();
+  _cache = new TileCache((tile) => {
+    const tileId = this._tileIds.get(tile);
+    this._tilesChanged.delete(tileId);
+    this.deleteGeometry(tileId);
+    this.releaseTileMemory(tile);
+  });
   _sizeByTile = /* @__PURE__ */ new Map();
   _samplesDimensions;
   _sampleLodClass;
@@ -31759,6 +31833,23 @@ class VirtualTilesController {
     this._lodBySample = new Array(this._sampleAmount);
     this.init();
   }
+  /**
+   * Full potential geometry-buffer footprint, including unrealized and evicted
+   * tiles. Generated counts stay stable as the view changes, so allocation
+   * between models does not oscillate with camera movement.
+   */
+  get geometryCacheSize() {
+    let bytes = 0;
+    for (const tile of this._tiles.values()) bytes += this.tileCacheBytes(tile);
+    return bytes;
+  }
+  /** Bounds only inactive geometry. Visible tiles are never cache victims. */
+  setCacheBudget(bytes) {
+    this._cache.setBudget(bytes);
+  }
+  flushTileRequests() {
+    return this._meshConnection.flush();
+  }
   restart() {
     this.resetUpdateProcess();
     this._meshConnection.clean();
@@ -31776,6 +31867,9 @@ class VirtualTilesController {
     return mesh.fetchMeshes(id, true);
   }
   dispose() {
+    this._cache.clear();
+    this._tileIds.clear();
+    this._tilesChanged.clear();
     for (const tile of this._tiles.values()) this.releaseTileMemory(tile);
     this._meshConnection.dispose();
     for (const [, mesh] of this._virtualMeshes) {
@@ -32084,10 +32178,7 @@ class VirtualTilesController {
   }
   /**
    * Structural equality of two worker-side views, covering every field
-   * the culling/LOD pass reads. `graphicThreshold` is deliberately
-   * ignored — it only budgets the invisible-tile cache, so a change in
-   * it must not trigger a full re-cull (the new value still takes
-   * effect because the caller stores the incoming view first).
+   * the culling/LOD pass reads. Cache allocation is independent of the view.
    */
   viewEquals(a, b) {
     if (a.fov !== b.fov || a.orthogonalDimension !== b.orthogonalDimension || a.viewSize !== b.viewSize || a.graphicQuality !== b.graphicQuality) {
@@ -32373,11 +32464,6 @@ class VirtualTilesController {
     const filter = (data) => data;
     return MultiBufferData.get(tile.visibilities, locations, filter);
   }
-  memoryOverflow() {
-    const current = VirtualTilesController._graphicMemoryConsumed;
-    const available = this._virtualView.graphicThreshold;
-    return current > available;
-  }
   updateMesh(sample) {
     let current = this.fetchLodLevel(sample);
     const past = this._sampleLodState[sample];
@@ -32416,7 +32502,7 @@ class VirtualTilesController {
   makeInvisibleFromTile(tileId, sample) {
     const tile = this._tiles.get(tileId);
     this.updateTileData(tile, sample, false, 0);
-    this.deleteTileIfNeeded(tile, tileId);
+    this.updateTileCache(tile, tileId);
   }
   updateSample(id, lod) {
     const itemId = this.itemId(id);
@@ -32531,23 +32617,27 @@ class VirtualTilesController {
     delete tile.faceIdBuffer;
     delete tile.ids;
   }
-  deleteTileIfNeeded(tile, tileId) {
-    const shouldDelete = this.getShouldDeleteTile(tile);
-    if (shouldDelete) {
-      this.deleteGeometry(tileId);
-      this.releaseTileMemory(tile);
-      return;
-    }
-    this._tilesChanged.add(tileId);
-  }
-  getShouldDeleteTile(tile) {
+  updateTileCache(tile, tileId) {
+    if (!tile.notVirtual) return;
     if (!tile.visibilities || !tile.highlights) {
       throw new Error("Fragments: Malformed tile!");
     }
-    const invisible = tile.visibilities.fullOf(false);
-    const noHighlight = tile.highlights.fullOf(0);
-    const memoryOverflow = this.memoryOverflow();
-    return invisible && noHighlight && memoryOverflow;
+    const inactive = tile.visibilities.fullOf(false) && tile.highlights.fullOf(0);
+    if (inactive) {
+      this._tileIds.set(tile, tileId);
+      this._cache.retain(tile, this.tileCacheBytes(tile));
+    } else {
+      this._cache.remove(tile);
+      this._tileIds.delete(tile);
+    }
+    if (tile.notVirtual) this._tilesChanged.add(tileId);
+  }
+  tileCacheBytes(tile) {
+    const positions = tile.positionCount ?? 0;
+    if (tile.objectClass === ObjectClass.LINE) {
+      return positions * 4 + positions / 6 * 17 + 8 * 3 * 4 + 18;
+    }
+    return positions * 4 + (tile.normalCount ?? 0) * 2 + positions / 3 * 16 + (tile.indexCount ?? 0) * 4;
   }
   checkTileMemoryOverflow(tileId, tileData) {
     const tile = this._tiles.get(tileId);
@@ -32762,12 +32852,17 @@ class VirtualTilesController {
     const tile = this._tiles.get(tileId);
     this.updateTileData(tile, sample, visible, highlight);
     if (tile.notVirtual) {
+      if (visible || highlight !== 0) {
+        this._cache.remove(tile);
+        this._tileIds.delete(tile);
+      }
       const realizedOptimizedLayout = tile.optimizedLayoutBySample?.get(sample);
       const renderLayoutClassChanged = tile.objectClass === ObjectClass.SHELL && tile.lod === CurrentLod.GEOMETRY && realizedOptimizedLayout !== void 0 && realizedOptimizedLayout !== this.shouldUseOptimizedLayout(tile, sample);
       if (renderLayoutClassChanged) this.updateSampleIndices(tile, sample);
-      this._tilesChanged.add(tileId);
+      this.updateTileCache(tile, tileId);
       return;
     }
+    if (tile.visibilities.fullOf(false) && tile.highlights.fullOf(0)) return;
     this.buildNewVirtualTile(tile, tileId);
   }
   getLodTileWhenPutSample(tileId, material) {
@@ -32914,6 +33009,8 @@ class VirtualTilesController {
     VirtualTilesController._graphicMemoryConsumed += tile.usedMemory;
   }
   releaseTileMemory(tile) {
+    this._cache.remove(tile);
+    this._tileIds.delete(tile);
     if (!tile.notVirtual) return;
     VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory;
     tile.notVirtual = false;
@@ -39479,6 +39576,13 @@ class VirtualFragmentsModel {
    */
   getItemSnapData(itemId) {
     return EditUtils.getItemSnapData(this, itemId);
+  }
+  getGeometryCacheSize() {
+    return this.tiles.geometryCacheSize;
+  }
+  async setGeometryCacheBudget(bytes) {
+    this.tiles.setCacheBudget(bytes);
+    await this.tiles.flushTileRequests();
   }
   setLodMode(lodMode) {
     this.tiles.setLodMode(lodMode);

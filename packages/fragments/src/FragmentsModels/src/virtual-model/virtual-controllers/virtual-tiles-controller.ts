@@ -42,6 +42,7 @@ import { RaycastController } from "./raycast-controller";
 import { VirtualMemoryController } from "./virtual-memory-controller";
 import { VirtualMaterialController } from "./virtual-material-controller";
 import { encodeFaceColors } from "../../utils/face-color-encoder";
+import { TileCache } from "./tile-cache";
 
 type VirtualMeshes = Map<RepresentationClass, VirtualMeshManager>;
 
@@ -78,6 +79,13 @@ export class VirtualTilesController {
   private readonly _tileIdGenerator = new CRC();
   private readonly _tiles = new Map<number, TileData>();
   private readonly _tilesChanged = new Set<number>();
+  private readonly _tileIds = new Map<TileData, number>();
+  private readonly _cache = new TileCache<TileData>((tile) => {
+    const tileId = this._tileIds.get(tile)!;
+    this._tilesChanged.delete(tileId);
+    this.deleteGeometry(tileId);
+    this.releaseTileMemory(tile);
+  });
   private readonly _sizeByTile = new Map<number, number>();
   private readonly _samplesDimensions: DataBuffer;
   private readonly _sampleLodClass: DataBuffer;
@@ -190,6 +198,26 @@ export class VirtualTilesController {
     this.init();
   }
 
+  /**
+   * Full potential geometry-buffer footprint, including unrealized and evicted
+   * tiles. Generated counts stay stable as the view changes, so allocation
+   * between models does not oscillate with camera movement.
+   */
+  get geometryCacheSize() {
+    let bytes = 0;
+    for (const tile of this._tiles.values()) bytes += this.tileCacheBytes(tile);
+    return bytes;
+  }
+
+  /** Bounds only inactive geometry. Visible tiles are never cache victims. */
+  setCacheBudget(bytes: number) {
+    this._cache.setBudget(bytes);
+  }
+
+  flushTileRequests() {
+    return this._meshConnection.flush();
+  }
+
   restart() {
     this.resetUpdateProcess();
     this._meshConnection.clean();
@@ -210,6 +238,9 @@ export class VirtualTilesController {
   }
 
   dispose() {
+    this._cache.clear();
+    this._tileIds.clear();
+    this._tilesChanged.clear();
     for (const tile of this._tiles.values()) this.releaseTileMemory(tile);
     this._meshConnection.dispose();
     for (const [, mesh] of this._virtualMeshes) {
@@ -256,9 +287,8 @@ export class VirtualTilesController {
     VirtualMemoryController.setCapacity(view.meshThreshold);
     if (!this._updateFailed && previous && this.viewEquals(previous, view)) {
       // Same view as before (typically a forced update used as a
-      // completion fence): adopt the new view object (it may carry a
-      // fresh graphicThreshold) but skip the full re-cull. If the
-      // previous pass already finished, emit a FINISH directly so
+      // completion fence): adopt the new view object but skip the full
+      // re-cull. If the previous pass already finished, emit a FINISH directly so
       // main-side `forceUpdateFinish` fences settle; if a pass is
       // still running, its natural FINISH will carry the latest view revision.
       this.setupViewPlanes();
@@ -594,10 +624,7 @@ export class VirtualTilesController {
 
   /**
    * Structural equality of two worker-side views, covering every field
-   * the culling/LOD pass reads. `graphicThreshold` is deliberately
-   * ignored — it only budgets the invisible-tile cache, so a change in
-   * it must not trigger a full re-cull (the new value still takes
-   * effect because the caller stores the incoming view first).
+   * the culling/LOD pass reads. Cache allocation is independent of the view.
    */
   private viewEquals(a: any, b: any): boolean {
     if (
@@ -991,12 +1018,6 @@ export class VirtualTilesController {
     return MultiBufferData.get(tile.visibilities!, locations, filter);
   }
 
-  private memoryOverflow() {
-    const current = VirtualTilesController._graphicMemoryConsumed;
-    const available = this._virtualView.graphicThreshold;
-    return current > available;
-  }
-
   private updateMesh(sample: number) {
     let current = this.fetchLodLevel(sample);
     const past = this._sampleLodState[sample];
@@ -1045,7 +1066,7 @@ export class VirtualTilesController {
   private makeInvisibleFromTile(tileId: number, sample: number) {
     const tile = this._tiles.get(tileId) as TileData;
     this.updateTileData(tile, sample, false, 0);
-    this.deleteTileIfNeeded(tile, tileId);
+    this.updateTileCache(tile, tileId);
   }
 
   private updateSample(id: number, lod: CurrentLod) {
@@ -1179,24 +1200,41 @@ export class VirtualTilesController {
     delete tile.ids;
   }
 
-  private deleteTileIfNeeded(tile: TileData, tileId: number) {
-    const shouldDelete = this.getShouldDeleteTile(tile);
-    if (shouldDelete) {
-      this.deleteGeometry(tileId);
-      this.releaseTileMemory(tile);
-      return;
-    }
-    this._tilesChanged.add(tileId);
-  }
-
-  private getShouldDeleteTile(tile: TileData) {
+  private updateTileCache(tile: TileData, tileId: number) {
+    if (!tile.notVirtual) return;
     if (!tile.visibilities || !tile.highlights) {
       throw new Error("Fragments: Malformed tile!");
     }
-    const invisible = tile.visibilities.fullOf(false);
-    const noHighlight = tile.highlights.fullOf(0);
-    const memoryOverflow = this.memoryOverflow();
-    return invisible && noHighlight && memoryOverflow;
+    const inactive =
+      tile.visibilities.fullOf(false) && tile.highlights.fullOf(0);
+    if (inactive) {
+      this._tileIds.set(tile, tileId);
+      this._cache.retain(tile, this.tileCacheBytes(tile));
+    } else {
+      this._cache.remove(tile);
+      this._tileIds.delete(tile);
+    }
+    // retain may evict this tile synchronously. Never send UPDATE after DELETE.
+    if (tile.notVirtual) this._tilesChanged.add(tileId);
+  }
+
+  private tileCacheBytes(tile: TileData) {
+    const positions = tile.positionCount ?? 0;
+    if (tile.objectClass === ObjectClass.LINE) {
+      // Two endpoints per segment, plus the visibility byte and optional
+      // highlight colour/opacity. Reserve these even before first highlight.
+      // The small shared quad is counted conservatively once per tile.
+      return positions * 4 + (positions / 6) * 17 + 8 * 3 * 4 + 18;
+    }
+    // Float32 positions and encoded face colours, Int16 normals, Uint8 item
+    // IDs; reserve both canonical and compact Uint16 indices. The compact
+    // buffer may be allocated later without changing the cache allowance.
+    return (
+      positions * 4 +
+      (tile.normalCount ?? 0) * 2 +
+      (positions / 3) * 16 +
+      (tile.indexCount ?? 0) * 4
+    );
   }
 
   private checkTileMemoryOverflow(tileId: number, tileData: TileData) {
@@ -1478,6 +1516,12 @@ export class VirtualTilesController {
     const tile = this._tiles.get(tileId) as TileData;
     this.updateTileData(tile, sample, visible, highlight);
     if (tile.notVirtual) {
+      // Remove reactivated geometry before the fallible layout update, so
+      // a later cache-budget change cannot evict a visible tile after a failure.
+      if (visible || highlight !== 0) {
+        this._cache.remove(tile);
+        this._tileIds.delete(tile);
+      }
       const realizedOptimizedLayout = tile.optimizedLayoutBySample?.get(sample);
       const renderLayoutClassChanged =
         tile.objectClass === ObjectClass.SHELL &&
@@ -1485,9 +1529,11 @@ export class VirtualTilesController {
         realizedOptimizedLayout !== undefined &&
         realizedOptimizedLayout !== this.shouldUseOptimizedLayout(tile, sample);
       if (renderLayoutClassChanged) this.updateSampleIndices(tile, sample);
-      this._tilesChanged.add(tileId);
+      this.updateTileCache(tile, tileId);
       return;
     }
+    // A hidden, never-realized tile needs no geometry allocation.
+    if (tile.visibilities!.fullOf(false) && tile.highlights!.fullOf(0)) return;
     this.buildNewVirtualTile(tile, tileId);
   }
 
@@ -1664,6 +1710,8 @@ export class VirtualTilesController {
   }
 
   private releaseTileMemory(tile: TileData) {
+    this._cache.remove(tile);
+    this._tileIds.delete(tile);
     if (!tile.notVirtual) return;
     VirtualTilesController._graphicMemoryConsumed -= tile.usedMemory!;
     tile.notVirtual = false;
