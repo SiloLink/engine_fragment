@@ -94,9 +94,11 @@ export class FragmentsModel implements IFragmentsModel<true> {
   readonly onViewFailed = new Event<ModelViewUpdateError>();
 
   /**
-   * A set of item IDs that are currently visible (i.e. have at least
-   * one tile rendered on screen). Updated automatically as tiles are
-   * created and deleted by the mesh manager.
+   * Internal item IDs with geometry in at least one active tile draw range.
+   * Updated as worker tile changes are applied, including highlights and LOD.
+   * Inactive retained geometry is excluded. This is not an occlusion or pixel
+   * visibility test; material opacity and parent Object3D visibility are not
+   * evaluated here. Use {@link getLocalIdsFromItemIds} to obtain local IDs.
    */
   readonly visibleItems = new Set<number>();
 
@@ -255,6 +257,7 @@ export class FragmentsModel implements IFragmentsModel<true> {
     this._gridsManager = new GridsManager(this);
     this.tiles.onItemSet.add(({ value: mesh }) => this.object.add(mesh));
     this.tiles.onBeforeDelete.add(({ value: mesh }) => {
+      this._meshManager.releaseTileVisibility(this, mesh);
       this.object.remove(mesh);
       mesh.geometry.dispose();
       MiscHelper.forEach(mesh.material, (mat) => {

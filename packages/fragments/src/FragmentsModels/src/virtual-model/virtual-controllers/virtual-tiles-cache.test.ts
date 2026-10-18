@@ -179,6 +179,34 @@ async function setup() {
 }
 
 describe("resident tile cache with a real virtual model", () => {
+  it("reports true item membership for normal, highlighted and retained ranges", async () => {
+    const f = await setup();
+    f.model.tiles.setCacheBudget(f.model.tiles.geometryCacheSize);
+    const ids = (localIds: number[]) =>
+      f.model.properties.getItemIdsFromLocalIds(localIds);
+    const membership = (localId: number) => {
+      const request = f.posted
+        .filter((r) => r.tileId === f.tileFor(localId).id && r.tileData)
+        .at(-1);
+      return new Set(request.tileData.visibleItemIds);
+    };
+    expect(membership(100)).toEqual(new Set(ids([100, 101])));
+    f.hide(100);
+    expect(membership(101)).toEqual(new Set(ids([101])));
+    f.hide(101);
+    expect(f.tileFor(101).tile.notVirtual).toBe(true);
+    expect(membership(101)).toEqual(new Set());
+    f.show(100);
+    expect(membership(100)).toEqual(new Set(ids([100])));
+
+    f.model.highlight([102], { color: "#ff0000", opacity: 0.2 });
+    f.sweep();
+    expect(f.tileFor(102).tile.visibilities.fullOf(false)).toBe(true);
+    expect(membership(102)).toEqual(new Set(ids([102])));
+    f.hide(102);
+    expect(membership(102)).toEqual(new Set());
+  });
+
   it("retains hidden geometry even when the visible working set exceeds the budget", async () => {
     const f = await setup();
     const cost = f.bytes(102);

@@ -33,22 +33,25 @@ it("negotiates before dispatching concurrent model requests", async () => {
   expect(received).toEqual(["a", "b"]);
 });
 
-it("rejects incompatible workers without dispatching model work", async () => {
-  const { port1, port2 } = channel();
-  const requests: unknown[] = [];
-  port2.on("message", (message) => requests.push(message));
-  const main = new Connection(vi.fn());
-  main.init(port1 as unknown as MessagePort);
-  const result = expect(main.fetch({ modelId: "a" })).rejects.toThrow(
-    /protocol.*incompatible/i,
-  );
-  port2.postMessage({ fragmentsProtocol: -1 });
-  await result;
-  expect(requests.filter((input: any) => input.modelId)).toEqual([]);
-  await expect(main.fetch({ modelId: "b" })).rejects.toThrow(
-    /protocol.*incompatible/i,
-  );
-});
+it.each([-1, 3])(
+  "rejects incompatible worker protocol %s without dispatching model work",
+  async (version) => {
+    const { port1, port2 } = channel();
+    const requests: unknown[] = [];
+    port2.on("message", (message) => requests.push(message));
+    const main = new Connection(vi.fn());
+    main.init(port1 as unknown as MessagePort);
+    const result = expect(main.fetch({ modelId: "a" })).rejects.toThrow(
+      /protocol.*incompatible/i,
+    );
+    port2.postMessage({ fragmentsProtocol: version });
+    await result;
+    expect(requests.filter((input: any) => input.modelId)).toEqual([]);
+    await expect(main.fetch({ modelId: "b" })).rejects.toThrow(
+      /protocol.*incompatible/i,
+    );
+  },
+);
 
 it("rejects a silent legacy worker within a bounded time", async () => {
   vi.useFakeTimers();

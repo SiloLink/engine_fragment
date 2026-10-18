@@ -1,4 +1,4 @@
-import { RenderView } from "../../multithreading/protocol";
+import { RenderView, TileRenderData } from "../../multithreading/protocol";
 import * as THREE from "three";
 import {
   TileData,
@@ -834,34 +834,52 @@ export class VirtualTilesController {
     geometry: any,
     sample: any,
   ) {
-    const renderLayout = this.getRenderLayout(tile, geometry);
-    const oldToNewVertex = renderLayout?.oldToNewVertex;
-    const resultPosition = tile.vertexLocation[location] * 3;
-    for (let i = 0; i < geometry.positionBuffer!.length; i += 3) {
-      const oldVertex = i / 3;
-      const newVertex = oldToNewVertex ? oldToNewVertex[oldVertex] : oldVertex;
-      this._temp.vector.fromArray(geometry.positionBuffer!, i);
-      this._temp.vector.applyMatrix4(this._temp.matrix);
-      this._temp.vector.toArray(
-        tile.positionBuffer!,
-        resultPosition + newVertex * 3,
-      );
-    }
+    const oldToNewVertex = this.getRenderLayout(tile, geometry)?.oldToNewVertex;
+    const vertexStart = tile.vertexLocation[location];
+    const positions = geometry.positionBuffer!;
+    const targetPositions = tile.positionBuffer!;
+    const normals = geometry.normalBuffer;
+    const targetNormals = tile.normalBuffer;
+    const faceIds = geometry.faceIdBuffer;
+    const targetFaceIds = tile.faceIdBuffer;
+    const matrix = this._temp.matrix.elements;
+    const sampleOffset = sample.sample * 100;
 
-    if (tile.normalBuffer) {
-      const resultPosition = tile.vertexLocation[location] * 3;
-      for (let i = 0; i < geometry.normalBuffer!.length; i += 3) {
-        const oldVertex = i / 3;
-        const newVertex = oldToNewVertex
-          ? oldToNewVertex[oldVertex]
-          : oldVertex;
-        this._temp.vector.fromArray(geometry.normalBuffer!, i);
-        this._temp.vector.transformDirection(this._temp.matrix);
-        this._temp.vector.multiplyScalar(normalizationValue);
-        this._temp.vector.toArray(
-          tile.normalBuffer!,
-          resultPosition + newVertex * 3,
-        );
+    // Transform each vertex once, sharing the remapped destination across its
+    // attributes. Keep the arithmetic order of Vector3.applyMatrix4 and
+    // transformDirection so the uploaded Float32/Int16 values stay identical.
+    for (let i = 0, oldVertex = 0; i < positions.length; i += 3, oldVertex++) {
+      const vertex =
+        vertexStart + (oldToNewVertex ? oldToNewVertex[oldVertex] : oldVertex);
+      const offset = vertex * 3;
+      const x = positions[i];
+      const y = positions[i + 1];
+      const z = positions[i + 2];
+      const w =
+        1 / (matrix[3] * x + matrix[7] * y + matrix[11] * z + matrix[15]);
+      targetPositions[offset] =
+        (matrix[0] * x + matrix[4] * y + matrix[8] * z + matrix[12]) * w;
+      targetPositions[offset + 1] =
+        (matrix[1] * x + matrix[5] * y + matrix[9] * z + matrix[13]) * w;
+      targetPositions[offset + 2] =
+        (matrix[2] * x + matrix[6] * y + matrix[10] * z + matrix[14]) * w;
+
+      if (targetNormals) {
+        const nx = normals![i];
+        const ny = normals![i + 1];
+        const nz = normals![i + 2];
+        const tx = matrix[0] * nx + matrix[4] * ny + matrix[8] * nz;
+        const ty = matrix[1] * nx + matrix[5] * ny + matrix[9] * nz;
+        const tz = matrix[2] * nx + matrix[6] * ny + matrix[10] * nz;
+        const inverseLength = 1 / (Math.sqrt(tx * tx + ty * ty + tz * tz) || 1);
+        targetNormals[offset] = tx * inverseLength * normalizationValue;
+        targetNormals[offset + 1] = ty * inverseLength * normalizationValue;
+        targetNormals[offset + 2] = tz * inverseLength * normalizationValue;
+      }
+
+      if (targetFaceIds && faceIds) {
+        // Distinguish the faces of separate instances of the same geometry.
+        targetFaceIds[vertex] = faceIds[oldVertex] + sampleOffset;
       }
     }
 
@@ -876,20 +894,6 @@ export class VirtualTilesController {
         indicesPosition,
         position,
       );
-    }
-
-    if (tile.faceIdBuffer && geometry.faceIdBuffer) {
-      // We define an offset to the ID to force that different samples have different face IDs
-      const sampleOffset = sample.sample * 100;
-      const start = tile.vertexLocation[location];
-      const vertexCount = geometry.positionCount! / 3;
-      for (let oldVertex = 0; oldVertex < vertexCount; oldVertex++) {
-        const newVertex = oldToNewVertex
-          ? oldToNewVertex[oldVertex]
-          : oldVertex;
-        tile.faceIdBuffer[start + newVertex] =
-          geometry.faceIdBuffer[oldVertex] + sampleOffset;
-      }
     }
 
     if (geometry.objectClass === ObjectClass.SHELL) {
@@ -1702,7 +1706,48 @@ export class VirtualTilesController {
     const visibilityData = this.getTileVisibility(tile, locations);
     const highlight = this.getTileHighlight(tile, locations);
     const { highlightData, highlightIds } = highlight;
-    return { visibilityData, highlightData, highlightIds };
+    const visibleItemIds = this.getVisibleItemIds(tile, locations, [
+      visibilityData,
+      highlightData,
+    ]);
+    return { visibilityData, highlightData, highlightIds, visibleItemIds };
+  }
+
+  private getVisibleItemIds(
+    tile: TileData,
+    locations: number[],
+    ranges: TileRenderData["visibilityData"][],
+  ) {
+    const items = new Set<number>();
+    const cursors = ranges.map(() => 0);
+    const total = tile.indexCount || (tile.positionCount ?? 0) / 3;
+    // Sample spans and draw ranges are both in tile-slot order. Walking them
+    // together is linear in samples/ranges, independent of the vertex count.
+    // Use the tile's applied ranges: global sample state may be ahead of a
+    // partially processed tile, and highlights have their own draw ranges.
+    for (const [sample, span] of tile.sampleSpans) {
+      const start = locations[span.start];
+      const end = locations[span.start + span.count] ?? total;
+      if (end <= start) continue;
+      let drawn = false;
+      for (let i = 0; i < ranges.length; i++) {
+        const range = ranges[i];
+        if (!range) continue;
+        let cursor = cursors[i];
+        while (cursor < range.position.length) {
+          const count = range.size[cursor];
+          const rangeEnd =
+            count === 0xffffffff ? total : range.position[cursor] + count;
+          if (count > 0 && rangeEnd > start) break;
+          cursor++;
+        }
+        cursors[i] = cursor;
+        drawn ||=
+          cursor < range.position.length && range.position[cursor] < end;
+      }
+      if (drawn) items.add(this.itemId(sample));
+    }
+    return Uint32Array.from(items);
   }
 
   private updateMemoryOnTileLoad(tile: TileData) {

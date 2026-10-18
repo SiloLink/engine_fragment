@@ -190,6 +190,7 @@ export class MultithreadingHelper {
   }
 
   private static addAllTileData(request: any, content: any[]) {
+    this.addRequestContent("visibleItemIds", request.tileData, content);
     this.addRequestTileData(request, content, "visibilityData");
     const extras = ["highlightIds"];
     this.addRequestTileData(request, content, "highlightData", extras);

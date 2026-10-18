@@ -9,7 +9,7 @@ import {
 
 // Bump when either side changes the wire contract incompatibly. Both entry
 // points build this module; a separately hosted worker must match at runtime.
-export const FRAGMENTS_PROTOCOL_VERSION = 3;
+export const FRAGMENTS_PROTOCOL_VERSION = 4;
 export const PROTOCOL_HANDSHAKE_TIMEOUT = 10_000;
 
 export interface ProtocolHello {
@@ -56,6 +56,8 @@ interface TileRanges {
 }
 
 export interface TileRenderData {
+  /** Unique internal item IDs in this tile's active draw ranges, not picker bytes. */
+  visibleItemIds: Uint32Array;
   visibilityData?: TileRanges;
   highlightData?: TileRanges;
   highlightIds?: Uint32Array;

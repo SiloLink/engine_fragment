@@ -61,6 +61,7 @@ function createProtocolHarness() {
       graphicsQuality: 1,
       threads: connection,
       tiles: new Map([[1, mesh]]),
+      visibleItems: new Set<number>(),
       _finishProcessing: vi.fn(),
       _failProcessing: vi.fn(),
     } as unknown as FragmentsModel;
@@ -107,6 +108,10 @@ function createProtocolHarness() {
             lod: CurrentLod.GEOMETRY,
             indexCount: 6,
             indexLocation: [0, 3],
+            sampleSpans: new Map([
+              [0, { start: 0, count: 1 }],
+              [1, { start: 1, count: 1 }],
+            ]),
             visibilities,
           },
         ],
@@ -115,6 +120,7 @@ function createProtocolHarness() {
       _tilesToRebuild: new Set(),
       _meshConnection: meshConnection,
       tilesUpdated: false,
+      itemId: (sample: number) => sample,
       updateMesh(sample: number) {
         processedSamples.push(sample);
         if (sample === 0) {

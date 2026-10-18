@@ -75,6 +75,10 @@ export class MeshManager {
   }[] = [];
   private readonly _modelInstances = new Map<string, FragmentsModel>();
   private readonly _applicationFailures = new Map<FragmentsModel, unknown>();
+  private readonly _visibleItemCounts = new WeakMap<
+    FragmentsModel,
+    Map<number, number>
+  >();
   private _updateTimer: ReturnType<typeof setTimeout> | null = null;
   private _updating = false;
   private _disposed = false;
@@ -89,7 +93,10 @@ export class MeshManager {
     });
     this.list.onItemDeleted.add((key) => {
       const model = this._modelInstances.get(key);
-      if (model) this._applicationFailures.delete(model);
+      if (model) {
+        this._applicationFailures.delete(model);
+        this.clearVisibleItems(model);
+      }
       this._modelInstances.delete(key);
       this.removeRequests(key);
       this.settleViewFences();
@@ -97,13 +104,18 @@ export class MeshManager {
     this.list.onItemUpdated.add(({ key, value }) => {
       const previous = this._modelInstances.get(key);
       if (previous !== value) {
-        if (previous) this._applicationFailures.delete(previous);
+        if (previous) {
+          this._applicationFailures.delete(previous);
+          this.clearVisibleItems(previous);
+        }
         this.removeRequests(key);
       }
       this._modelInstances.set(key, value);
       this.settleViewFences();
     });
     this.list.onCleared.add(() => {
+      for (const model of this._modelInstances.values())
+        this.clearVisibleItems(model);
       this._modelInstances.clear();
       this._applicationFailures.clear();
       this.requests.clear();
@@ -272,6 +284,8 @@ export class MeshManager {
     this._disposed = true;
     this.cancelUpdate();
     this.requests.dispose();
+    for (const model of this._modelInstances.values())
+      this.clearVisibleItems(model);
     this._modelInstances.clear();
     this._applicationFailures.clear();
     const error = new Error("Fragments: mesh manager is disposed.");
@@ -340,23 +354,24 @@ export class MeshManager {
       if (request.objectClass === undefined) return false;
       const tile = this.create(request);
       this.setTileData(tile, request);
-      const uniqueIds = this.extractUniqueItemIds(request.itemIds);
-      tile.userData.itemIds = uniqueIds;
-      this.trackVisibleItems(model, uniqueIds, true);
+      const previous = model.tiles.get(request.tileId);
+      if (previous) this.releaseTileVisibility(model, previous);
+      this.updateVisibleItems(model, tile, request.tileData.visibleItemIds);
       model.tiles.set(tile.userData.tileId, tile);
       return true;
     }
     if (tileRequestClass === TileRequestClass.DELETE) {
-      const tile = model.tiles.get(request.tileId);
-      if (tile?.userData.itemIds) {
-        this.trackVisibleItems(model, tile.userData.itemIds, false);
-      }
       return model.tiles.delete(request.tileId);
     }
     if (tileRequestClass === TileRequestClass.UPDATE) {
       const tileObject = model.tiles.get(request.tileId);
       if (tileObject) {
         this.updateStatus(tileObject, request);
+        this.updateVisibleItems(
+          model,
+          tileObject,
+          request.tileData.visibleItemIds,
+        );
         return true;
       }
     } else if (tileRequestClass === TileRequestClass.FINISH) {
@@ -369,27 +384,57 @@ export class MeshManager {
     return false;
   }
 
-  private extractUniqueItemIds(itemIds: any): Set<number> {
-    const unique = new Set<number>();
-    if (!itemIds) return unique;
-    for (let i = 0; i < itemIds.length; i++) {
-      unique.add(itemIds[i]);
+  private updateVisibleItems(
+    model: FragmentsModel,
+    tile: BIMMesh,
+    itemIds: Uint32Array,
+  ) {
+    const next = new Set(itemIds);
+    const previous = tile.userData.itemIds as Set<number> | undefined;
+    let counts = this._visibleItemCounts.get(model);
+    if (!counts) {
+      counts = new Map();
+      this._visibleItemCounts.set(model, counts);
     }
-    return unique;
+    for (const id of previous ?? []) {
+      if (!next.has(id)) this.removeVisibleItem(model, counts, id);
+    }
+    for (const id of next) {
+      if (previous?.has(id)) continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+      model.visibleItems.add(id);
+    }
+    tile.userData.itemIds = next;
   }
 
-  private trackVisibleItems(
-    model: FragmentsModel,
-    itemIds: Set<number>,
-    added: boolean,
-  ) {
-    for (const itemId of itemIds) {
-      if (added) {
-        model.visibleItems.add(itemId);
-      } else {
-        model.visibleItems.delete(itemId);
-      }
+  /** @internal Releases membership for both streamed and direct tile deletion. */
+  releaseTileVisibility(model: FragmentsModel, tile: BIMMesh) {
+    const counts = this._visibleItemCounts.get(model);
+    const ids = tile.userData.itemIds as Set<number> | undefined;
+    if (counts && ids) {
+      for (const id of ids) this.removeVisibleItem(model, counts, id);
     }
+    delete tile.userData.itemIds;
+  }
+
+  private removeVisibleItem(
+    model: FragmentsModel,
+    counts: Map<number, number>,
+    id: number,
+  ) {
+    const count = counts.get(id)!;
+    if (count > 1) counts.set(id, count - 1);
+    else {
+      counts.delete(id);
+      model.visibleItems.delete(id);
+    }
+  }
+
+  private clearVisibleItems(model: FragmentsModel) {
+    if (!this._visibleItemCounts.has(model)) return;
+    model.visibleItems.clear();
+    this._visibleItemCounts.delete(model);
+    for (const tile of model.tiles.values()) delete tile.userData.itemIds;
   }
 
   private createMesh(request: any) {
