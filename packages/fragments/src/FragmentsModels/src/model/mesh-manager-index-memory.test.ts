@@ -125,6 +125,53 @@ describe.each([Uint16Array, Uint32Array])(
       expect(index.version).toBe(2);
     });
 
+    test("publishes each packing and drops it with the full index", () => {
+      const { full, geometry, index, update } = tile(ArrayType);
+      update(twoRuns);
+      expect(geometry.userData.compactRuns).toBeUndefined();
+
+      update(threeRuns);
+      const packing = geometry.userData.compactRuns;
+      // The white run reaches the end of the full index.
+      expect(packing).toEqual({
+        start: new Uint32Array([0, 6, 12]),
+        count: new Uint32Array([3, 3, 6]),
+        offset: new Uint32Array([0, 3, 6]),
+      });
+      // Each packed run holds its full-index slots from its offset on.
+      for (let i = 0; i < packing.start.length; i++) {
+        const start = packing.start[i];
+        const count = packing.count[i];
+        const offset = packing.offset[i];
+        expect(index.array.slice(offset, offset + count)).toEqual(
+          full.slice(start, start + count),
+        );
+      }
+      expect(packing.offset.at(-1) + packing.count.at(-1)).toBe(
+        geometry.drawRange.count,
+      );
+
+      update(otherRuns);
+      expect(geometry.userData.compactRuns).not.toBe(packing);
+      expect(geometry.userData.compactRuns).toEqual({
+        start: new Uint32Array([3, 9, 15]),
+        count: new Uint32Array([3, 3, 3]),
+        offset: new Uint32Array([0, 3, 6]),
+      });
+
+      // A run past the end of the index packs nothing and is left out.
+      update({ position: [0, 6, 18], size: [3, 3, 3] });
+      expect(geometry.userData.compactRuns).toEqual({
+        start: new Uint32Array([0, 6]),
+        count: new Uint32Array([3, 3]),
+        offset: new Uint32Array([0, 3]),
+      });
+
+      update(threeRuns, true);
+      expect(geometry.userData.compactIndex).toBe(false);
+      expect("compactRuns" in geometry.userData).toBe(false);
+    });
+
     test("reuses one working copy across repeated compaction threshold transitions", () => {
       const { full, geometry, index, update, compactedOffsets } =
         tile(ArrayType);

@@ -284,6 +284,26 @@ export type DataBuffer =
 export type BIMMesh = THREE.Mesh | LODMesh;
 
 /**
+ * How a compacted SHELL tile packs its full index. The GPU index then holds
+ * only the visible runs, one after another: packed run `i` holds the
+ * full-index slots `[start[i], start[i] + count[i])` at the packed slots
+ * from `offset[i]`. Runs follow the full index in order and do not overlap.
+ * It is published as `geometry.userData.compactRuns` while
+ * `geometry.userData.compactIndex` is true, as a new object for every new
+ * packing. Renderers that draw full-index ranges of a tile, such as the
+ * chunks {@link FragmentsModel.getItemDrawChunks} returns, map them through
+ * it.
+ */
+export interface CompactIndexRuns {
+  /** The full-index slot each packed run starts at. */
+  start: Uint32Array;
+  /** The number of index slots in each packed run. */
+  count: Uint32Array;
+  /** The packed slot each run starts at. */
+  offset: Uint32Array;
+}
+
+/**
  * Interface representing the data of a mesh.
  */
 export type MeshData = {

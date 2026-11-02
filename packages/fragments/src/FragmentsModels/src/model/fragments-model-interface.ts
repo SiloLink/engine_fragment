@@ -31,7 +31,9 @@ type Promisify<T, Async extends boolean> = Async extends true ? Promise<T> : T;
  * Per-tile index-buffer chunk returned by {@link IFragmentsModel.getItemDrawChunks}.
  * `position` and `size` are parallel arrays: start index and count for each
  * contiguous run of vertices belonging to the queried items in this tile's
- * index buffer.
+ * full index buffer. While the tile draws a compacted index
+ * (`geometry.userData.compactIndex`), the runs sit at other slots: map them
+ * through `geometry.userData.compactRuns` ({@link CompactIndexRuns}).
  */
 export type DrawChunk = {
   tileId: number;

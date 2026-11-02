@@ -13,6 +13,7 @@
 * Reuse identical preserved highlight materials across items and repeated updates, while keeping depth, transparency and inheritance settings distinct.
 * Settle forced updates when the scene is empty or the last model is removed, without waiting for a worker FINISH that can no longer arrive.
 * Give each highlighted item of an LOD tile its own opacity next to its own color, instead of the first highlight's opacity for the whole tile.
+* Publish how a compacted SHELL tile packs its full index (`geometry.userData.compactRuns`). `getItemDrawChunks` positions address the full index, so a renderer drawing them on the tile's own index, such as an outline proxy, drew other items' triangles or nothing while the tile was compacted; it can now map them to the packed slots.
 
 ### ⚠ BREAKING CHANGES
 

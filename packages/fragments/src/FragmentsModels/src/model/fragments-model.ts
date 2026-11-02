@@ -1173,6 +1173,11 @@ export class FragmentsModel implements IFragmentsModel<true> {
    * and `index`, then call `geometry.addGroup(position[i], size[i], 0)`
    * for each chunk to draw only the matching slices. No highlight
    * material slot is allocated; the call is read-only.
+   *
+   * Positions address the tile's full index. While the tile draws a
+   * compacted index (`geometry.userData.compactIndex`), map them through
+   * `geometry.userData.compactRuns` ({@link CompactIndexRuns}) first; the
+   * packing changes with the view.
    */
   getItemDrawChunks(localIds: Iterable<number>) {
     return this._dataManager.getItemDrawChunks(this, localIds);

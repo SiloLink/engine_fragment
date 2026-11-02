@@ -6,6 +6,7 @@ import {
   ObjectClass,
   CurrentLod,
   BIMMesh,
+  CompactIndexRuns,
 } from "./model-types";
 import { FragmentsModel } from "./fragments-model";
 import { DataMap } from "../../../Utils";
@@ -532,6 +533,8 @@ export class MeshManager {
    * if it was compacted before) when the group path must be used:
    * LOD/wire meshes, tiles without a CPU index copy, highlighted tiles
    * (highlight groups address the full index) and tiles with few runs.
+   * The packing is published as `userData.compactRuns`, so renderers that
+   * draw item chunks of the full index find them in the packed one.
    */
   private applyCompactIndex(
     geometry: THREE.BufferGeometry,
@@ -559,6 +562,10 @@ export class MeshManager {
     if (index.array === full) index.array = full.slice();
     const target = index.array as Uint16Array | Uint32Array;
     const { position, size } = visibilityData!;
+    const packedStarts = new Uint32Array(runs);
+    const packedCounts = new Uint32Array(runs);
+    const packedOffsets = new Uint32Array(runs);
+    let packed = 0;
     let count = 0;
     for (let i = 0; i < runs; i++) {
       const start = position[i];
@@ -568,6 +575,10 @@ export class MeshManager {
         : Math.min(full.length, start + size[i]);
       if (end <= start) continue;
       target.set(full.subarray(start, end), count);
+      packedStarts[packed] = start;
+      packedCounts[packed] = end - start;
+      packedOffsets[packed] = count;
+      packed++;
       count += end - start;
     }
 
@@ -575,6 +586,12 @@ export class MeshManager {
     geometry.setDrawRange(0, count);
     geometry.addGroup(0, count, 0);
     geometry.userData.compactIndex = true;
+    const packing: CompactIndexRuns = {
+      start: packedStarts.subarray(0, packed),
+      count: packedCounts.subarray(0, packed),
+      offset: packedOffsets.subarray(0, packed),
+    };
+    geometry.userData.compactRuns = packing;
     return true;
   }
 
@@ -588,6 +605,7 @@ export class MeshManager {
     index.needsUpdate = true;
     geometry.setDrawRange(0, Infinity);
     geometry.userData.compactIndex = false;
+    delete geometry.userData.compactRuns;
   }
 
   // TODO: Deduplicate with other white values (LODManager, MaterialManager)
