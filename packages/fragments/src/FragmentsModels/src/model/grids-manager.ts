@@ -380,12 +380,12 @@ export class GridsManager {
 
   dispose() {
     this._grids.removeFromParent();
-    for (const grid of this._grids.children) {
-      const line = grid as THREE.Mesh;
-      line.geometry.dispose();
-      line.geometry = undefined as any;
-      line.material = undefined as any;
-    }
+    // Axis lines sit under their grid and axis groups. Labels share the
+    // geometries of `_labelMap`, which are released below.
+    this._grids.traverse((object) => {
+      if (object instanceof THREE.Line) object.geometry.dispose();
+    });
+    this._grids.clear();
     this._gridMaterial.dispose();
     this._gridMaterial = undefined as any;
     this._labelMaterial.dispose();
